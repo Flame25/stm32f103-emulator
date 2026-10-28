@@ -1,0 +1,131 @@
+#define OLC_PGE_APPLICATION
+#include "olcPixelGameEngine.h"
+
+#include "bus.h"
+#include "cpu.h"
+
+#include <cstdint>
+#include <map>
+#include <string>
+
+// Visualization front-end ported from javidx9's olcNES "DrawCpu / DrawRam /
+// DrawCode" panels, retargeted from the 6502 to this Cortex-M3 core.
+class Demo_stm32 : public olc::PixelGameEngine {
+public:
+  Demo_stm32() { sAppName = "stm32f103 Emulator - CPU"; }
+
+  bool OnUserCreate() override {
+    loadTestProgram();
+    m_asm = m_cpu.disassemble(0x0000, bus::kMemorySize - 1);
+    m_cpu.reset();
+    return true;
+  }
+
+  bool OnUserUpdate(float fElapsedTime) override {
+    (void)fElapsedTime;
+    Clear(olc::DARK_BLUE);
+
+    if (GetKey(olc::Key::SPACE).bPressed) {
+      do {
+        m_cpu.clock();
+      } while (m_cpu.reg_sp_cycles() != 0);
+    }
+
+    if (GetKey(olc::Key::R).bPressed)
+      m_cpu.reset();
+
+    DrawRam(2, 2, 0x0000, 8, 8);
+    DrawCpu(300, 2);
+    DrawCode(300, 100, 20);
+
+    DrawString(2, 110, "SPACE = Step Instruction  R = RESET");
+
+    return true;
+  }
+
+private:
+  bus m_bus;
+  cpu m_cpu{m_bus};
+  std::map<uint32_t, std::string> m_asm;
+
+  // A tiny Thumb image so something meaningful shows up: LDR (literal) then a
+  // NOP sled into a word parked at the aligned literal slot.
+  void loadTestProgram() {
+    const uint8_t program[] = {
+        0x02, 0x48, // 0x0000: LDR r0, [pc, #4] -> Align(pc,4)+4 = 0x0008
+        0x00, 0xBF, // 0x0002: NOP
+        0x00, 0xBF, // 0x0004: NOP
+        0x00, 0xBF, // 0x0006: NOP
+        0xEF, 0xBE, 0xAD, 0xDE, // 0x0008: literal 0xDEADBEEF
+        0x5A, 0x00, 0x00, 0x00, // 0x0008: literal 90 (0x0000005A)
+        0x5B, 0x00, 0x00, 0x00,
+    };
+    m_bus.load(0x0000, program, sizeof(program));
+  }
+
+  static std::string hex(uint32_t n, int d) {
+    std::string s(static_cast<std::size_t>(d), '0');
+    for (int i = d - 1; i >= 0; --i, n >>= 4)
+      s[static_cast<std::size_t>(i)] = "0123456789ABCDEF"[n & 0xF];
+    return s;
+  }
+
+  void DrawRam(int x, int y, uint32_t nAddr, int nRows, int nColumns) {
+    int nRamY = y;
+    for (int row = 0; row < nRows; ++row) {
+      std::string sOffset = "$" + hex(nAddr, 8) + ":";
+      for (int col = 0; col < nColumns; ++col) {
+        sOffset += " " + hex(m_bus.read8(nAddr), 2);
+        ++nAddr;
+      }
+      DrawString(x, nRamY, sOffset);
+      nRamY += 10;
+    }
+  }
+
+  void DrawCpu(int x, int y) {
+    DrawString(x, y, "STATUS:", olc::WHITE);
+    const char *names = "NZCVQ";
+    for (int i = 0; i < 5; ++i) {
+      DrawString(x + 64 + i * 16, y, std::string(1, names[i]),
+                 m_cpu.flag(names[i]) ? olc::GREEN : olc::RED);
+    }
+
+    DrawString(x, y + 10, "PC: $" + hex(m_cpu.reg_pc(), 8));
+    DrawString(x, y + 20, "CYCLES: $" + hex(m_cpu.reg_sp_cycles(), 8));
+    DrawString(x, y + 30, "COUNT: $" + hex(m_cpu.reg_clock_count(), 8));
+    for (int i = 0; i < 13; ++i) {
+      DrawString(x, y + 40 + i * 10,
+                 "R" + std::to_string(i) + ": $" + hex(m_cpu.reg(i), 8) +
+                     "  [" + std::to_string(m_cpu.reg(i)) + "]");
+    }
+    DrawString(x, y + 170, "SP: $" + hex(m_cpu.reg(13), 8));
+    DrawString(x, y + 180, "LR: $" + hex(m_cpu.reg(14), 8));
+  }
+
+  void DrawCode(int x, int y, int nLines) {
+    auto it = m_asm.find(m_cpu.reg_pc());
+    int nLineY = (nLines >> 1) * 10 + y;
+    if (it == m_asm.end())
+      return;
+
+    DrawString(x, nLineY, (*it).second, olc::CYAN);
+    while (nLineY < (nLines * 10) + y && ++it != m_asm.end()) {
+      nLineY += 10;
+      DrawString(x, nLineY, (*it).second);
+    }
+
+    it = m_asm.find(m_cpu.reg_pc());
+    nLineY = (nLines >> 1) * 10 + y;
+    while (nLineY > y && --it != m_asm.end()) {
+      nLineY -= 10;
+    }
+  }
+};
+
+int main() {
+  Demo_stm32 demo;
+  if (demo.Construct(680, 420, 2, 2))
+    demo.Start();
+  return 0;
+}
