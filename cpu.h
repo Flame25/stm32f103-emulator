@@ -25,6 +25,10 @@ public:
 
   bool flag(char name) const;
 
+  // Debug/UI hooks: place the core at an address, or force a flag.
+  void set_pc(uint32_t address) { pc = address; }
+  void set_flag(char name, bool value);
+
   // Human readable form of the instruction at `address`. Advances `length`
   // by the size of the encoding (2 or 4 bytes).
   std::string disassemble(uint32_t address, uint8_t &length) const;
@@ -51,13 +55,19 @@ private:
     UNKNOWN,
     LDR_LITERAL,
     LDR_IMM,
+    B_COND, // A7.7.8  B<c>.W
+    B_W,    // A7.7.11 B (T4)
+    BL,     // A7.7.9  BL (immediate)
   };
 
-  // Operands pulled out of the raw halfword(s) by decode.
+  // Operands pulled out of the raw halfword(s) by decode. `cycles` lives here
+  // so decode stays a pure function and the disassembler can reuse it.
   struct decoded {
     Instruction op = Instruction::UNKNOWN;
     uint8_t rt = 0;
     uint8_t rn = 0;
+    uint8_t cond = 0;
+    uint8_t cycles = 1;
     uint32_t imm = 0;
   };
 
@@ -69,6 +79,13 @@ private:
 
   uint16_t clock_count = 0;
   uint8_t cycles = 0;
+
+  // Set by an instruction that redirects pc; stops clock() from applying the
+  // automatic advance.
+  bool pc_written = false;
+
+  // ConditionPassed() for B<c>.W. cond 111x is not a valid branch condition.
+  bool condition_passed(uint8_t cond);
 
   decoded ins;
 
@@ -85,4 +102,7 @@ private:
   // Instruction Set
   uint8_t LDR_LITERAL();
   uint8_t LDR_IMM();
+  uint8_t B_COND();
+  uint8_t B_W();
+  uint8_t BL();
 };

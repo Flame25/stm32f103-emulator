@@ -3,6 +3,17 @@
 #include <cstdio>
 #include <string>
 
+namespace {
+
+// Sign-extend the low `bits` of `value` to 32 bits.
+uint32_t sign_extend(uint32_t value, unsigned bits) {
+  const uint32_t sign = 1u << (bits - 1);
+  value &= (1u << bits) - 1u;
+  return (value ^ sign) - sign;
+}
+
+} // namespace
+
 cpu::cpu(bus &b) : m_bus(&b) {}
 
 void cpu::reset() {
@@ -13,6 +24,7 @@ void cpu::reset() {
   it_state = 0;
   cycles = 0;
   clock_count = 0;
+  pc_written = false;
   ins = decoded{};
 }
 
@@ -24,11 +36,61 @@ bool cpu::GetFlag(apsr_flag f) const {
   return (xpsr & static_cast<uint32_t>(f)) != 0;
 }
 
+// ConditionPassed() for the 4-bit cond field. Returns false for the reserved
+// cond == 0b111x encodings.
+bool cpu::condition_passed(uint8_t cond) {
+  const bool n = GetFlag(apsr_flag::N);
+  const bool z = GetFlag(apsr_flag::Z);
+  const bool c = GetFlag(apsr_flag::C);
+  const bool v = GetFlag(apsr_flag::V);
+
+  switch (cond >> 1) {
+  case 0b000: // EQ / NE
+    return (cond & 1u) ? !z : z;
+  case 0b001: // CS / CC
+    return (cond & 1u) ? !c : c;
+  case 0b010: // MI / PL
+    return (cond & 1u) ? !n : n;
+  case 0b011: // VS / VC
+    return (cond & 1u) ? !v : v;
+  case 0b100: // HI / LS
+    return (cond & 1u) ? (!c || z) : (c && !z);
+  case 0b101: // GE / LT
+    return (cond & 1u) ? (n != v) : (n == v);
+  case 0b110: // GT / LE
+    return (cond & 1u) ? (z || (n != v)) : (!z && (n == v));
+  default: // 0b111 -> AL/NV reserved in Thumb
+    return false;
+  }
+}
+
 void cpu::SetFlag(apsr_flag f, bool v) {
   if (v)
     xpsr |= static_cast<uint32_t>(f);
   else
     xpsr &= ~static_cast<uint32_t>(f);
+}
+
+void cpu::set_flag(char name, bool value) {
+  switch (name) {
+  case 'N':
+    SetFlag(apsr_flag::N, value);
+    break;
+  case 'Z':
+    SetFlag(apsr_flag::Z, value);
+    break;
+  case 'C':
+    SetFlag(apsr_flag::C, value);
+    break;
+  case 'V':
+    SetFlag(apsr_flag::V, value);
+    break;
+  case 'Q':
+    SetFlag(apsr_flag::Q, value);
+    break;
+  default:
+    break;
+  }
 }
 
 bool cpu::flag(char name) const {
@@ -48,12 +110,7 @@ bool cpu::flag(char name) const {
   }
 }
 
-// Fetch one halfword at pc and advance pc. pc is the source of truth for now;
-// r[15] is not kept in sync yet.
-uint16_t cpu::fetch16() {
-  uint16_t hw = read(pc);
-  return hw;
-}
+uint16_t cpu::fetch16() { return read(pc); }
 
 void cpu::clock() {
 
@@ -61,27 +118,32 @@ void cpu::clock() {
 
     uint16_t hw1 = read(pc);
 
-    bool adv_bit = false;
+    bool wide = false;
 
     // bits[15:11] == 11101 / 11110 / 11111 -> 32-bit Thumb instruction
     if ((hw1 >> 11) >= 0x1D) {
-      ins = decode_thumb32(hw1, fetch16());
-      adv_bit = true;
+      // Second halfword sits at pc + 2. Fetching it with fetch16() would read
+      // pc again and hand hw1 to the decoder as hw2.
+      ins = decode_thumb32(hw1, read(pc + 2));
+      wide = true;
     } else {
       ins = decode_thumb16(hw1);
     }
 
     execute();
 
-    if (adv_bit) {
-      pc += 4;
-    } else {
-      pc += 2;
+    if (!pc_written) {
+      pc += wide ? 4 : 2;
     }
+
+    cycles = ins.cycles;
+    pc_written = false;
   }
 
   clock_count++;
-  --cycles;
+  if (cycles != 0) {
+    --cycles;
+  }
 }
 
 cpu::decoded cpu::decode_thumb16(uint16_t hw) {
@@ -105,7 +167,7 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
     d.op = Instruction::LDR_LITERAL;
     d.rt = (hw >> 8) & 0x7;
     d.imm = static_cast<uint32_t>(hw & 0xFF) << 2;
-    cycles = 2;
+    d.cycles = 2;
     return d;
 
   // A5.3.1 Load/store, register offset
@@ -126,7 +188,7 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
     d.rt = hw & 0x7;
     d.rn = (hw >> 3) & 0x7;
     d.imm = static_cast<uint32_t>((hw >> 6) & 0x1F) << 2;
-    cycles = 2;
+    d.cycles = 2;
     return d;
 
   case 0x1C: // STRB (immediate)
@@ -160,21 +222,93 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
   case 0x34: // A7.7.8 B (conditional), A7.7.9 SVC, A7.7.10 UDF
   case 0x35:
   case 0x36:
-  case 0x37:
+  case 0x37: {
+    d.op = Instruction::B_COND;
+    d.cond = (uint8_t)(hw >> 8) & 0x0F;
+    d.imm = ((hw & 0xFF) << 1);
+    d.cycles = 1; // TODO: Check this again
+    return d;
+  }
   case 0x38: // A7.7.11 B (T2, unconditional)
   case 0x39:
   default:
-    // Unknown, or 32-bit prefix already filtered by clock().
-    cycles = 0;
+    // Unknown, or 32-bit prefix already filtered by clock(). Costs one tick
+    // so cycles never underflows.
     return d;
   }
 }
 
 cpu::decoded cpu::decode_thumb32(uint16_t hw1, uint16_t hw2) {
-  // TODO: B5.5 32-bit Thumb instruction encoding.
-  (void)hw1;
-  (void)hw2;
-  return decoded{};
+  decoded d;
+
+  // Level 1 (A5.3): hw1[15:11] selects the top-level group.
+  //   0x1D = 11101 -> load/store multiple, dual, exclusive, table branch
+  //   0x1E = 11110 -> data processing (modified immediate) / branches + misc
+  //   0x1F = 11111 -> data processing (plain imm) / load-store single
+  switch (hw1 >> 11) {
+  case 0x1E:
+    break; // sole group implemented for now
+  default:
+    return d; // TODO
+  }
+
+  // Level 2 (A5.3.2 / A5.3.1): hw2[15:14] splits the 11110 group.
+  // Verified against arm-none-eabi-as: BL with J1=0 has hw2[15:12]=0xD, so the
+  // discriminator cannot be hw2[15:12].
+  const uint32_t hi = hw2 >> 14;
+
+  if (hi == 0b10 && ((hw2 >> 12) & 1u)) {
+    // B (T4): 11110 S imm10 | 10 J1 1 J2 imm11
+    // imm32 = SignExtend(S:I1:I2:imm10:imm11:'0', 32), I = NOT(J XOR S)
+    const uint32_t s = (hw1 >> 10) & 1u;
+    const uint32_t j1 = (hw2 >> 13) & 1u;
+    const uint32_t j2 = (hw2 >> 11) & 1u;
+    const uint32_t i1 = (~(j1 ^ s)) & 1u;
+    const uint32_t i2 = (~(j2 ^ s)) & 1u;
+    const uint32_t imm = (s << 24) | (i1 << 23) | (i2 << 22) |
+                         ((hw1 & 0x3FFu) << 12) | ((hw2 & 0x7FFu) << 1);
+    d.op = Instruction::B_W;
+    d.imm = sign_extend(imm, 25);
+    d.cycles = 3;
+    return d;
+  }
+
+  if (hi == 0b10) {
+    // B<c> (T3): 11110 S cond imm6 | 10 J1 0 J2 imm11
+    // imm32 = SignExtend(S:J2:J1:imm6:imm11:'0', 32), J used directly.
+    const uint32_t cond = (hw1 >> 6) & 0xF;
+    if (cond >= 0b1110)
+      return d; // 1110 = UNDEFINED, 1111 = UDF (permanently undefined)
+
+    const uint32_t s = (hw1 >> 10) & 1u;
+    const uint32_t j1 = (hw2 >> 13) & 1u;
+    const uint32_t j2 = (hw2 >> 11) & 1u;
+    const uint32_t imm = (s << 20) | (j2 << 19) | (j1 << 18) |
+                         ((hw1 & 0x3Fu) << 12) | ((hw2 & 0x7FFu) << 1);
+    d.op = Instruction::B_COND;
+    d.cond = static_cast<uint8_t>(cond);
+    d.imm = sign_extend(imm, 21);
+    d.cycles = 3;
+    return d;
+  }
+
+  if (hi == 0b11 && ((hw2 >> 12) & 1u)) {
+    // BL (T1). BLX (immediate) is A/R-only: on M-profile bit12 == 0 here is
+    // UNDEFINED, so it is deliberately not decoded.
+    const uint32_t s = (hw1 >> 10) & 1u;
+    const uint32_t j1 = (hw2 >> 13) & 1u;
+    const uint32_t j2 = (hw2 >> 11) & 1u;
+    const uint32_t i1 = (~(j1 ^ s)) & 1u;
+    const uint32_t i2 = (~(j2 ^ s)) & 1u;
+    const uint32_t imm = (s << 24) | (i1 << 23) | (i2 << 22) |
+                         ((hw1 & 0x3FFu) << 12) | ((hw2 & 0x7FFu) << 1);
+    d.op = Instruction::BL;
+    d.imm = sign_extend(imm, 25);
+    d.cycles = 3;
+    return d;
+  }
+
+  return d; // TODO: remaining 11110 sub-groups
 }
 
 void cpu::execute() {
@@ -184,6 +318,15 @@ void cpu::execute() {
     break;
   case Instruction::LDR_IMM:
     LDR_IMM();
+    break;
+  case Instruction::B_COND:
+    B_COND();
+    break;
+  case Instruction::B_W:
+    B_W();
+    break;
+  case Instruction::BL:
+    BL();
     break;
   case Instruction::UNKNOWN:
     break;
@@ -228,6 +371,30 @@ uint8_t cpu::LDR_IMM() {
   return 0;
 }
 
+// A7.7.12 B<c> (T3): if ConditionPassed() then BranchWritePC(PC + imm32)
+uint8_t cpu::B_COND() {
+  if (condition_passed(ins.cond)) {
+    pc = pc + 4 + ins.imm; // PC reads as insn_addr + 4 on M-profile
+    pc_written = true;
+  }
+  return 0;
+}
+
+// A7.7.11 B (T4): BranchWritePC(PC + imm32)
+uint8_t cpu::B_W() {
+  pc = pc + 4 + ins.imm;
+  pc_written = true;
+  return 0;
+}
+
+// A7.7.18 BL (T1): LR = PC | 1 ; BranchWritePC(PC + imm32)
+uint8_t cpu::BL() {
+  r[14] = (pc + 4) | 1u; // return address, Thumb bit set
+  pc = pc + 4 + ins.imm;
+  pc_written = true;
+  return 0;
+}
+
 namespace {
 
 std::string hex(uint32_t value, int digits) {
@@ -256,6 +423,25 @@ std::string format_thumb16(uint16_t hw, uint32_t addr) {
     uint32_t offset = static_cast<uint32_t>((hw >> 6) & 0x1F) << 2;
     return "LDR r" + std::to_string(rt) + ", [r" + std::to_string(rn) + ", #" +
            std::to_string(offset) + "]";
+  }
+
+  if ((hw >> 12) == 0b1101) {
+    uint32_t cond = (hw >> 8) & 0xF;
+
+    if (cond == 0b1110)
+      return "UDF";
+
+    if (cond == 0b1111)
+      return "SVC";
+
+    int32_t offset = static_cast<int8_t>((hw & 0xFF) << 1);
+    uint32_t target = addr + 4 + offset;
+
+    static const char *conditions[] = {"EQ", "NE", "CS", "CC", "MI",
+                                       "PL", "VS", "VC", "HI", "LS",
+                                       "GE", "LT", "GT", "LE"};
+
+    return "B" + std::string(conditions[cond]) + " $" + hex(target, 8);
   }
 
   return "TODO " + hex(hw, 4);
