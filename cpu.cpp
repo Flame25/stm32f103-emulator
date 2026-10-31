@@ -39,10 +39,10 @@ bool cpu::GetFlag(apsr_flag f) const {
 // ConditionPassed() for the 4-bit cond field. Returns false for the reserved
 // cond == 0b111x encodings.
 bool cpu::condition_passed(uint8_t cond) {
-  const bool n = GetFlag(apsr_flag::N);
-  const bool z = GetFlag(apsr_flag::Z);
-  const bool c = GetFlag(apsr_flag::C);
-  const bool v = GetFlag(apsr_flag::V);
+  const bool n = GetFlag(N);
+  const bool z = GetFlag(Z);
+  const bool c = GetFlag(C);
+  const bool v = GetFlag(V);
 
   switch (cond >> 1) {
   case 0b000: // EQ / NE
@@ -74,19 +74,19 @@ void cpu::SetFlag(apsr_flag f, bool v) {
 void cpu::set_flag(char name, bool value) {
   switch (name) {
   case 'N':
-    SetFlag(apsr_flag::N, value);
+    SetFlag(N, value);
     break;
   case 'Z':
-    SetFlag(apsr_flag::Z, value);
+    SetFlag(Z, value);
     break;
   case 'C':
-    SetFlag(apsr_flag::C, value);
+    SetFlag(C, value);
     break;
   case 'V':
-    SetFlag(apsr_flag::V, value);
+    SetFlag(V, value);
     break;
   case 'Q':
-    SetFlag(apsr_flag::Q, value);
+    SetFlag(Q, value);
     break;
   default:
     break;
@@ -96,15 +96,15 @@ void cpu::set_flag(char name, bool value) {
 bool cpu::flag(char name) const {
   switch (name) {
   case 'N':
-    return GetFlag(apsr_flag::N);
+    return GetFlag(N);
   case 'Z':
-    return GetFlag(apsr_flag::Z);
+    return GetFlag(Z);
   case 'C':
-    return GetFlag(apsr_flag::C);
+    return GetFlag(C);
   case 'V':
-    return GetFlag(apsr_flag::V);
+    return GetFlag(V);
   case 'Q':
-    return GetFlag(apsr_flag::Q);
+    return GetFlag(Q);
   default:
     return false;
   }
@@ -150,11 +150,36 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
   decoded d;
 
   // 000xx: A5.2.1 Shift (immediate), add, subtract, move, and compare
-  if ((hw >> 13) == 0b000) {
-    return d; // TODO
+  // if ((hw >> 13) == 0b000) {
+  //   return d; // TODO
+  // }
+
+  if ((hw >> 9) == 0b0001110) { // A.7.7.3 ADD (Immediate) T1
+    d.op = Instruction::ADD_IMM;
+    d.rn = (hw >> 3) & 0x7;
+    d.rd = hw & 0x7;
+    d.imm = static_cast<uint32_t>(hw >> 6) & 0x7;
+    d.cycles = 9;
+    return d;
   }
 
+  // Use 6 bits instead of 5 to include bit[10], which can be either 0 or 1.
+  // Example: LDR (immediate) T1 has the fixed pattern 01101 in bit[15:11].
+  // Including bit[10], the pattern becomes 01101x, matching switch cases
+  // 0x1A and 0x1B when using `hw >> 10`.
   switch (hw >> 10) {
+  case 0x07:
+
+  case 0x08: // A7.7.76 MOV (immediate) T1
+  case 0x09:
+    d.op = Instruction::MOV_IMM;
+    d.rn = (hw >> 8) & 0x7;
+    d.imm = static_cast<uint32_t>(hw & 0xFF);
+    d.cycles = 2;
+    return d;
+  case 0x0C:
+  case 0x0D:
+    return d;
   case 0x10:  // A5.2.2 Data processing
     return d; // TODO
 
@@ -180,13 +205,19 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
   // A5.3.2 Load/store, immediate
   case 0x18: // STR (immediate, word): 01100 imm5 Rn Rt
   case 0x19:
+    d.op = Instruction::STR_IMM;
+    d.rt = hw & 0x07;
+    d.rn = (hw >> 3) & 0x07;
+    d.imm = static_cast<uint32_t>((hw >> 6) & 0x1F) << 2;
+    d.index = 1;
+    d.add = 1;
     return d; // TODO
 
   case 0x1A: // LDR (immediate, word): 01101 imm5 Rn Rt
   case 0x1B:
     d.op = Instruction::LDR_IMM;
     d.rt = hw & 0x7;
-    d.rn = (hw >> 3) & 0x7;
+    d.rn = (hw >> 3) & 0x07;
     d.imm = static_cast<uint32_t>((hw >> 6) & 0x1F) << 2;
     d.cycles = 2;
     return d;
@@ -203,6 +234,10 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
   case 0x23:
   case 0x24: // A5.3.5 Load/store SP-relative
   case 0x25:
+    d.op = Instruction::LDR_IMM;
+    d.rt = (hw >> 8) & 0x07;
+    d.imm = static_cast<uint32_t>(hw & 0xFF) << 2;
+    return d;
   case 0x26:
   case 0x27:
     return d; // TODO
@@ -328,6 +363,15 @@ void cpu::execute() {
   case Instruction::BL:
     BL();
     break;
+  case Instruction::MOV_IMM:
+    MOV_IMM();
+    break;
+  case Instruction::STR_IMM:
+    STR_IMM();
+    break;
+  case Instruction::ADD_IMM:
+    ADD_IMM();
+    break;
   case Instruction::UNKNOWN:
     break;
   }
@@ -358,7 +402,7 @@ uint8_t cpu::LDR_LITERAL() {
     }
 
   } else {
-    r[ins.rt] = read32(base + ins.imm);
+    r[ins.rt] = m_bus->read32(address);
   }
   // TODO: Checker bit 0 for fault
   return 0;
@@ -395,6 +439,69 @@ uint8_t cpu::BL() {
   return 0;
 }
 
+uint8_t cpu::MOV_IMM() {
+
+  r[ins.rn] = ins.imm;
+
+  // NON IT Block - MOV becoming MOVS
+  if (!it_state) {
+    SetFlag(N, (ins.imm >> 31) & 1u);
+    SetFlag(Z, ins.imm == 0);
+  }
+
+  return 0;
+}
+
+uint8_t cpu::ADD_IMM() {
+
+  uint64_t unsigned_sum = static_cast<uint64_t>(r[ins.rn]) + ins.imm;
+
+  bool sign_a = (r[ins.rn] >> 31) & 1u;
+  bool sign_b = (ins.imm >> 31) & 1u;
+  bool sign_result = (unsigned_sum >> 31) & 1u;
+
+  bool carry = (unsigned_sum >> 32) & 1u;
+  uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
+
+  if (!it_state) {
+    SetFlag(N, (result32 >> 31) & 1u);
+    SetFlag(C, carry);
+    SetFlag(Z, result32 == 0);
+
+    if (sign_a == sign_b && sign_result != sign_a) {
+      SetFlag(V, 1);
+    } else {
+      SetFlag(V, 0);
+    }
+  }
+
+  r[ins.rd] = result32;
+  return 0;
+}
+
+uint8_t cpu::STR_IMM() {
+  uint32_t addr = r[ins.rn];
+  uint32_t off_addr = addr;
+
+  if (ins.add) {
+    off_addr += ins.imm;
+  } else {
+    off_addr -= ins.imm;
+  }
+
+  if (ins.index) {
+    addr = off_addr;
+  }
+
+  m_bus->write32(addr, r[ins.rt]);
+
+  if (ins.wback) {
+    r[ins.rn] = off_addr;
+  }
+
+  return 0;
+}
+
 namespace {
 
 std::string hex(uint32_t value, int digits) {
@@ -425,6 +532,24 @@ std::string format_thumb16(uint16_t hw, uint32_t addr) {
            std::to_string(offset) + "]";
   }
 
+  // STR (immediate, word): 01100 imm5 Rn Rt
+  if ((hw >> 11) == 0b01100) {
+    uint32_t rt = hw & 0x7;
+    uint32_t rn = (hw >> 3) & 0x7;
+    uint32_t imm5 = (hw >> 6) & 0x1F;
+    uint32_t offset = imm5 << 2;
+
+    return "STR r" + std::to_string(rt) + ", [r" + std::to_string(rn) + ", #" +
+           std::to_string(offset) + "]";
+  }
+
+  if ((hw >> 11) == 0b00100) {
+    uint32_t rd = (hw >> 8) & 0x7;
+    uint32_t imm8 = hw & 0xFF;
+
+    return "MOVS r" + std::to_string(rd) + ", #" + std::to_string(imm8);
+  }
+
   if ((hw >> 12) == 0b1101) {
     uint32_t cond = (hw >> 8) & 0xF;
 
@@ -442,6 +567,15 @@ std::string format_thumb16(uint16_t hw, uint32_t addr) {
                                        "GE", "LT", "GT", "LE"};
 
     return "B" + std::string(conditions[cond]) + " $" + hex(target, 8);
+  }
+
+  if ((hw >> 9) == 0b0001110) {
+    uint32_t rd = hw & 0x7;
+    uint32_t rn = (hw >> 3) & 0x7;
+    uint32_t imm3 = (hw >> 6) & 0x7;
+
+    return "ADDS r" + std::to_string(rd) + ", r" + std::to_string(rn) + ", #" +
+           std::to_string(imm3);
   }
 
   return "TODO " + hex(hw, 4);

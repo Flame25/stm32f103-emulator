@@ -24,6 +24,7 @@ public:
   uint32_t read32(uint32_t address) const;
 
   void write8(uint32_t address, uint8_t value);
+  void write32(uint32_t address, uint32_t value);
 
   // Copy a program image into memory. Out-of-range bytes are dropped.
   void load(uint32_t address, const uint8_t *src, std::size_t count);

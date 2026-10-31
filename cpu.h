@@ -14,7 +14,7 @@ public:
   void clock();
   void reset();
 
-  // ---- Inspection (UI / tests) -------------------------------------------
+  // Inspection (UI / tests)
   uint32_t reg(int index) const { return r[index & 0xF]; }
   uint32_t reg_pc() const { return pc; }
   uint32_t reg_xpsr() const { return xpsr; }
@@ -41,12 +41,12 @@ public:
   uint32_t read32(uint32_t address) const;
 
 private:
-  enum class apsr_flag : uint32_t {
-    Q = (1u << 0),
-    V = (1u << 1),
-    Z = (1u << 2),
-    C = (1u << 3),
-    N = (1u << 4),
+  enum apsr_flag {
+    Q = (1 << 0),
+    V = (1 << 1),
+    Z = (1 << 2),
+    C = (1 << 3),
+    N = (1 << 4),
   };
 
   // One entry per encoding we currently implement. decode fills it,
@@ -55,9 +55,12 @@ private:
     UNKNOWN,
     LDR_LITERAL,
     LDR_IMM,
+    STR_IMM,
     B_COND, // A7.7.8  B<c>.W
     B_W,    // A7.7.11 B (T4)
     BL,     // A7.7.9  BL (immediate)
+    MOV_IMM,
+    ADD_IMM,
   };
 
   // Operands pulled out of the raw halfword(s) by decode. `cycles` lives here
@@ -66,16 +69,20 @@ private:
     Instruction op = Instruction::UNKNOWN;
     uint8_t rt = 0;
     uint8_t rn = 0;
+    uint8_t rd = 0;
     uint8_t cond = 0;
     uint8_t cycles = 1;
     uint32_t imm = 0;
+    bool add = 0;
+    bool index = 0;
+    bool wback = 0;
   };
 
   // Register following ARM Cortex M3 datasheet
   uint32_t r[16]{}; // r[13]=SP r[14]=LR r[15]=PC(addr of current insn)
   uint32_t pc = 0x00;
   uint32_t xpsr{}; // N Z C V Q T (APSR) + IPSR[8:0] + EPSR
-  uint8_t it_state{};
+  uint8_t it_state = 0;
 
   uint16_t clock_count = 0;
   uint8_t cycles = 0;
@@ -100,9 +107,12 @@ private:
   void execute();
 
   // Instruction Set
+  uint8_t STR_IMM();
   uint8_t LDR_LITERAL();
   uint8_t LDR_IMM();
   uint8_t B_COND();
   uint8_t B_W();
   uint8_t BL();
+  uint8_t MOV_IMM();
+  uint8_t ADD_IMM();
 };
