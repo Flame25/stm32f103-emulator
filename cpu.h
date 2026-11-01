@@ -38,6 +38,9 @@ public:
                                               uint32_t stop) const;
 
   uint16_t read(uint32_t address) const;
+
+  uint16_t read_flash(uint32_t address) const;
+
   uint32_t read32(uint32_t address) const;
 
 private:
@@ -60,7 +63,9 @@ private:
     B_W,    // A7.7.11 B (T4)
     BL,     // A7.7.9  BL (immediate)
     MOV_IMM,
+    MOV_REG,
     ADD_IMM,
+    ADD_REG,
   };
 
   // Operands pulled out of the raw halfword(s) by decode. `cycles` lives here
@@ -70,12 +75,15 @@ private:
     uint8_t rt = 0;
     uint8_t rn = 0;
     uint8_t rd = 0;
+    uint8_t rm = 0;
     uint8_t cond = 0;
     uint8_t cycles = 1;
     uint32_t imm = 0;
+    uint8_t l_t = 1; // T-(1,2,3,4...)
     bool add = 0;
     bool index = 0;
     bool wback = 0;
+    bool flags = 0;
   };
 
   // Register following ARM Cortex M3 datasheet
@@ -114,5 +122,7 @@ private:
   uint8_t B_W();
   uint8_t BL();
   uint8_t MOV_IMM();
+  uint8_t MOV_REG();
   uint8_t ADD_IMM();
+  uint8_t ADD_REG();
 };

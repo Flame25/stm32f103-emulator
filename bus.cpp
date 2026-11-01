@@ -1,16 +1,25 @@
 #include "bus.h"
-#include <algorithm>
-#include <cstdint>
 
 uint8_t bus::read8(uint32_t address) const {
   // TODO: no bounds check yet. Out-of-range reads silently return 0.
-  if (address >= kMemorySize)
+  if (address >= sizeof(sram))
     return 0;
-  return memory[address];
+  return sram[address];
+}
+
+uint8_t bus::read8_flash(uint32_t address) const {
+  if (address >= sizeof(sram))
+    return 0;
+  return flash[address];
 }
 
 uint16_t bus::read16(uint32_t address) const {
   return static_cast<uint16_t>(read8(address) | (read8(address + 1) << 8));
+}
+
+uint16_t bus::read16_flash(uint32_t address) const {
+  return static_cast<uint16_t>(read8_flash(address) |
+                               (read8_flash(address + 1) << 8));
 }
 
 uint32_t bus::read32(uint32_t address) const {
@@ -21,9 +30,15 @@ uint32_t bus::read32(uint32_t address) const {
 }
 
 void bus::write8(uint32_t address, uint8_t value) {
-  if (address >= kMemorySize)
+  if (address >= sizeof(sram))
     return;
-  memory[address] = value;
+  sram[address] = value;
+}
+
+void bus::write8_flash(uint32_t address, uint8_t value) {
+  if (address >= sizeof(flash))
+    return;
+  flash[address] = value;
 }
 
 void bus::write32(uint32_t address, uint32_t value) {
@@ -33,7 +48,7 @@ void bus::write32(uint32_t address, uint32_t value) {
   write8(address + 3, (value >> 24) & 0xFF);
 }
 
-void bus::load(uint32_t address, const uint8_t *src, std::size_t count) {
+void bus::load_flash(uint32_t address, const uint8_t *src, std::size_t count) {
   for (std::size_t i = 0; i < count; ++i)
-    write8(address + static_cast<uint32_t>(i), src[i]);
+    write8_flash(address + static_cast<uint32_t>(i), src[i]);
 }

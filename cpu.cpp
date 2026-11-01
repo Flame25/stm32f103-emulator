@@ -30,6 +30,10 @@ void cpu::reset() {
 
 uint16_t cpu::read(uint32_t address) const { return m_bus->read16(address); }
 
+uint16_t cpu::read_flash(uint32_t address) const {
+  return m_bus->read16_flash(address);
+}
+
 uint32_t cpu::read32(uint32_t address) const { return m_bus->read32(address); }
 
 bool cpu::GetFlag(apsr_flag f) const {
@@ -116,7 +120,7 @@ void cpu::clock() {
 
   if (cycles == 0) {
 
-    uint16_t hw1 = read(pc);
+    uint16_t hw1 = read_flash(pc);
 
     bool wide = false;
 
@@ -124,7 +128,7 @@ void cpu::clock() {
     if ((hw1 >> 11) >= 0x1D) {
       // Second halfword sits at pc + 2. Fetching it with fetch16() would read
       // pc again and hand hw1 to the decoder as hw2.
-      ins = decode_thumb32(hw1, read(pc + 2));
+      ins = decode_thumb32(hw1, read_flash(pc + 2));
       wide = true;
     } else {
       ins = decode_thumb16(hw1);
@@ -154,12 +158,40 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
   //   return d; // TODO
   // }
 
+  if ((hw >> 6) == 0) { // A.7.7.77 MOV (Register) T2
+    d.op = Instruction::MOV_REG;
+    d.rm = (hw >> 3) & 0x7;
+    d.rd = hw & 0x7;
+    d.l_t = 2;
+    d.flags = true;
+  }
+
+  if ((hw >> 6) == 0b01000000101) { // A.7.7.2 ADC (Register) T1
+    d.rm = (hw >> 3) & 0x7;
+    d.rd = hw & 0x7;
+    d.flags = !it_state;
+  }
+
+  if ((hw >> 8) == 0x46) { // A.7.7.77 MOV (Register) T1
+    d.op = Instruction::MOV_REG;
+    uint8_t D = (hw >> 7) & 0x1;
+    d.rm = (hw >> 3) & 0xF;
+    d.rd = (hw & 0x7) | (D << 3);
+  }
+
   if ((hw >> 9) == 0b0001110) { // A.7.7.3 ADD (Immediate) T1
     d.op = Instruction::ADD_IMM;
     d.rn = (hw >> 3) & 0x7;
     d.rd = hw & 0x7;
     d.imm = static_cast<uint32_t>(hw >> 6) & 0x7;
-    d.cycles = 9;
+    return d;
+  }
+
+  if ((hw >> 9) == 0b0001100) { // A.7.7.3 ADD (Immediate) T1
+    d.op = Instruction::ADD_REG;
+    d.rm = (hw >> 6) & 0x7;
+    d.rn = (hw >> 3) & 0x7;
+    d.rd = hw & 0x7;
     return d;
   }
 
@@ -173,8 +205,9 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
   case 0x08: // A7.7.76 MOV (immediate) T1
   case 0x09:
     d.op = Instruction::MOV_IMM;
-    d.rn = (hw >> 8) & 0x7;
+    d.rd = (hw >> 8) & 0x7;
     d.imm = static_cast<uint32_t>(hw & 0xFF);
+    d.flags = !it_state;
     d.cycles = 2;
     return d;
   case 0x0C:
@@ -366,11 +399,17 @@ void cpu::execute() {
   case Instruction::MOV_IMM:
     MOV_IMM();
     break;
+  case Instruction::MOV_REG:
+    MOV_REG();
+    break;
   case Instruction::STR_IMM:
     STR_IMM();
     break;
   case Instruction::ADD_IMM:
     ADD_IMM();
+    break;
+  case Instruction::ADD_REG:
+    ADD_REG();
     break;
   case Instruction::UNKNOWN:
     break;
@@ -440,15 +479,39 @@ uint8_t cpu::BL() {
 }
 
 uint8_t cpu::MOV_IMM() {
-
-  r[ins.rn] = ins.imm;
+  uint32_t result = ins.imm;
+  r[ins.rd] = result;
 
   // NON IT Block - MOV becoming MOVS
   if (!it_state) {
-    SetFlag(N, (ins.imm >> 31) & 1u);
-    SetFlag(Z, ins.imm == 0);
+    SetFlag(N, (result >> 31) & 1u);
+    SetFlag(Z, result == 0);
+  } else {
+    // MOV with Carry
   }
 
+  return 0;
+}
+
+uint8_t cpu::MOV_REG() {
+  uint32_t result = ins.rm;
+
+  if (it_state && ins.l_t == 2) {
+    // UNPREDICTABLE
+    return 0;
+  }
+
+  if (ins.rd != 15) {
+    r[ins.rd] = result;
+
+    if (ins.flags) {
+      SetFlag(N, (result >> 31) & 1u);
+      SetFlag(Z, result == 0);
+    }
+  } else {
+
+    // TODO: Last in ITBlock
+  }
   return 0;
 }
 
@@ -473,6 +536,31 @@ uint8_t cpu::ADD_IMM() {
     } else {
       SetFlag(V, 0);
     }
+  }
+
+  r[ins.rd] = result32;
+  return 0;
+}
+
+uint8_t cpu::ADD_REG() {
+
+  uint32_t operand1 = r[ins.rn];
+  uint32_t operand2 = r[ins.rm];
+
+  uint64_t unsigned_sum = static_cast<uint64_t>(operand1) + operand2;
+
+  bool sign_a = (operand1 >> 31) & 1u;
+  bool sign_b = (operand2 >> 31) & 1u;
+  bool sign_result = (unsigned_sum >> 31) & 1u;
+
+  bool carry = (unsigned_sum >> 32) & 1u;
+  uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
+
+  if (!it_state) {
+    SetFlag(N, (result32 >> 31) & 1u);
+    SetFlag(C, carry);
+    SetFlag(Z, result32 == 0);
+    SetFlag(V, sign_a == sign_b && sign_result != sign_a);
   }
 
   r[ins.rd] = result32;
@@ -586,11 +674,11 @@ std::string format_thumb16(uint16_t hw, uint32_t addr) {
 std::string cpu::disassemble(uint32_t address, uint8_t &length) const {
   std::string s = "$" + hex(address, 8) + ": ";
 
-  uint16_t hw1 = read(address);
+  uint16_t hw1 = read_flash(address);
 
   // bits[15:11] == 11101 / 11110 / 11111 -> 32-bit Thumb instruction
   if ((hw1 >> 11) >= 0x1D) {
-    uint16_t hw2 = read(address + 2);
+    uint16_t hw2 = read_flash(address + 2);
     length = 4;
     return s + "TODO " + hex(hw1, 4) + " " + hex(hw2, 4) + " {32-bit}";
   }

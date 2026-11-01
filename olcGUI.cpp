@@ -16,7 +16,7 @@ public:
 
   bool OnUserCreate() override {
     loadTestProgram();
-    m_asm = m_cpu.disassemble(0x0000, bus::kMemorySize - 1);
+    m_asm = m_cpu.disassemble(0x0000, sizeof(bus::flash) - 1);
     m_cpu.reset();
     return true;
   }
@@ -48,18 +48,21 @@ private:
   cpu m_cpu{m_bus};
   std::map<uint32_t, std::string> m_asm;
 
-  // A tiny Thumb image so something meaningful shows up: LDR (literal) then a
-  // NOP sled into a word parked at the aligned literal slot.
   void loadTestProgram() {
     const uint8_t program[] = {
-        0x02, 0x48,             // 0x0000: LDR  R0, [PC, #8]
+        // 0x02, 0x48,             // 0x0000: LDR  R0, [PC, #8]
         0x01, 0xD0,             // 0x0002: BEQ  +2
         0x07, 0x21,             // 0x0004: MOVS R1, #7
+        0x08, 0x22,             // MOVS R2, #3
+        0x08, 0x23,             // MOVS R2, #3
         0xC8, 0x1C,             // 0x0006: ADDS R0, R1, #3
-        0x48, 0x60,             // STR R0, [R1, #4]
+        0xBF, 0x21,             // MOVS R1, #5
+        0xBF, 0x22,             // MOVS R2, #3
+        0x88, 0x18,             // ADDS R0, R1, R2
+        0x58, 0x60,             // STR R0, [R1, #4]
         0xEF, 0xBE, 0xAD, 0xDE, // 0x0008: 0xDEADBEEF
     };
-    m_bus.load(0x0000, program, sizeof(program));
+    m_bus.load_flash(0x0000, program, sizeof(program));
   }
 
   static std::string hex(uint32_t n, int d) {
