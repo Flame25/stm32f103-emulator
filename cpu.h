@@ -2,7 +2,9 @@
 
 #include "bus.h"
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <sstream>
 #include <string>
 
 // ARM Cortex M3 Core
@@ -24,6 +26,8 @@ public:
   inline bool complete() { return cycles == 0; }
 
   bool flag(char name) const;
+
+  void handle_semihosting();
 
   // Debug/UI hooks: place the core at an address, or force a flag.
   void set_pc(uint32_t address) { pc = address; }
@@ -66,6 +70,12 @@ private:
     MOV_REG,
     ADD_IMM,
     ADD_REG,
+    ADC_REG,
+    AND_REG,
+    EOR_REG,
+    SUB_IMM,
+    SUB_REG,
+    BKPT,
   };
 
   // Operands pulled out of the raw halfword(s) by decode. `cycles` lives here
@@ -95,6 +105,8 @@ private:
   uint16_t clock_count = 0;
   uint8_t cycles = 0;
 
+  std::function<void(const std::string &)> semihost_out;
+
   // Set by an instruction that redirects pc; stops clock() from applying the
   // automatic advance.
   bool pc_written = false;
@@ -112,6 +124,11 @@ private:
   uint16_t fetch16();
   decoded decode_thumb16(uint16_t hw);
   decoded decode_thumb32(uint16_t hw1, uint16_t hw2);
+  decoded decode_shift_add_sub_mov_cmp(uint16_t hw);
+  decoded decode_ldr_literal(uint16_t hw);
+  decoded decode_ldst_single(uint16_t hw);
+  decoded decode_special_bx(uint16_t hw);
+
   void execute();
 
   // Instruction Set
@@ -125,4 +142,7 @@ private:
   uint8_t MOV_REG();
   uint8_t ADD_IMM();
   uint8_t ADD_REG();
+  uint8_t ADC_REG();
+  uint8_t SUB_IMM();
+  uint8_t BKPT();
 };

@@ -151,158 +151,193 @@ void cpu::clock() {
 }
 
 cpu::decoded cpu::decode_thumb16(uint16_t hw) {
-  decoded d;
+  decoded d; // make sure d.op defaults to UNDEF
 
-  // 000xx: A5.2.1 Shift (immediate), add, subtract, move, and compare
-  // if ((hw >> 13) == 0b000) {
-  //   return d; // TODO
-  // }
-
-  if ((hw >> 6) == 0) { // A.7.7.77 MOV (Register) T2
+  if ((hw >> 6) == 0) { // MOV (register) T2 (LSL #0)
     d.op = Instruction::MOV_REG;
     d.rm = (hw >> 3) & 0x7;
     d.rd = hw & 0x7;
     d.l_t = 2;
     d.flags = true;
+    return d;
   }
 
-  if ((hw >> 6) == 0b01000000101) { // A.7.7.2 ADC (Register) T1
+  if ((hw >> 6) == 0b0100000101) { // ADC (register) T1
+    d.op = Instruction::ADC_REG;
     d.rm = (hw >> 3) & 0x7;
     d.rd = hw & 0x7;
     d.flags = !it_state;
-  }
-
-  if ((hw >> 8) == 0x46) { // A.7.7.77 MOV (Register) T1
-    d.op = Instruction::MOV_REG;
-    uint8_t D = (hw >> 7) & 0x1;
-    d.rm = (hw >> 3) & 0xF;
-    d.rd = (hw & 0x7) | (D << 3);
-  }
-
-  if ((hw >> 9) == 0b0001110) { // A.7.7.3 ADD (Immediate) T1
-    d.op = Instruction::ADD_IMM;
-    d.rn = (hw >> 3) & 0x7;
-    d.rd = hw & 0x7;
-    d.imm = static_cast<uint32_t>(hw >> 6) & 0x7;
     return d;
   }
 
-  if ((hw >> 9) == 0b0001100) { // A.7.7.3 ADD (Immediate) T1
-    d.op = Instruction::ADD_REG;
+  if ((hw >> 8) == 0x46) { // MOV (register) T1
+    d.op = Instruction::MOV_REG;
+    d.rm = (hw >> 3) & 0xF;
+    d.rd = (hw & 0x7) | (((hw >> 7) & 1) << 3);
+    d.flags = false;
+    return d;
+  }
+
+  if ((hw >> 8) == 0xBE) { // BKPT T1
+    d.op = Instruction::BKPT;
+    d.imm = static_cast<uint32_t>(hw & 0xFF);
+    d.cycles = 3;
+  }
+
+  switch (hw >> 9) { // add/sub reg/imm3
+  case 0b0001100:    // ADD (register) T1
+  case 0b0001101:    // SUB (register) T1
+    d.op = (hw >> 9) & 1 ? Instruction::SUB_REG : Instruction::ADD_REG;
     d.rm = (hw >> 6) & 0x7;
     d.rn = (hw >> 3) & 0x7;
     d.rd = hw & 0x7;
+    d.flags = !it_state;
+    return d;
+  case 0b0001110: // ADD (immediate) T1
+  case 0b0001111: // SUB (immediate) T1
+    d.op = (hw >> 9) & 1 ? Instruction::SUB_IMM : Instruction::ADD_IMM;
+    d.imm = (hw >> 6) & 0x7;
+    d.rn = (hw >> 3) & 0x7;
+    d.rd = hw & 0x7;
+    d.flags = !it_state;
     return d;
   }
 
-  // Use 6 bits instead of 5 to include bit[10], which can be either 0 or 1.
-  // Example: LDR (immediate) T1 has the fixed pattern 01101 in bit[15:11].
-  // Including bit[10], the pattern becomes 01101x, matching switch cases
-  // 0x1A and 0x1B when using `hw >> 10`.
   switch (hw >> 10) {
-  case 0x07:
-
-  case 0x08: // A7.7.76 MOV (immediate) T1
+  case 0x08: // MOV (immediate) T1
   case 0x09:
     d.op = Instruction::MOV_IMM;
     d.rd = (hw >> 8) & 0x7;
-    d.imm = static_cast<uint32_t>(hw & 0xFF);
+    d.imm = hw & 0xFF;
     d.flags = !it_state;
     d.cycles = 2;
     return d;
-  case 0x0C:
+
+  case 0x0A: // CMP (immediate) T1
+  case 0x0B:
+    return d; // TODO
+
+  case 0x0C: // ADD (immediate) T2
   case 0x0D:
+  case 0x0E: // SUB (immediate) T2
+  case 0x0F:
+    d.op = (hw & 0x0800) ? Instruction::SUB_IMM : Instruction::ADD_IMM;
+    d.rd = (hw >> 8) & 0x7;
+    d.rn = d.rd;
+    d.imm = hw & 0xFF;
+    d.flags = !it_state;
     return d;
-  case 0x10:  // A5.2.2 Data processing
-    return d; // TODO
 
-  case 0x11:  // A5.2.3 Special data instructions and branch and exchange
-    return d; // TODO
+  case 0x10:
+    return d; // A5.2.2 Data processing, TODO
+  case 0x11:
+    return d; // A5.2.3 Special data / BX, TODO
 
-  // A7.7.5 LDR (literal): 01001 Rt imm8
-  case 0x12:
+  case 0x12: // LDR (literal)
   case 0x13:
     d.op = Instruction::LDR_LITERAL;
     d.rt = (hw >> 8) & 0x7;
-    d.imm = static_cast<uint32_t>(hw & 0xFF) << 2;
+    d.imm = (hw & 0xFF) << 2;
     d.cycles = 2;
     return d;
 
-  // A5.3.1 Load/store, register offset
   case 0x14:
   case 0x15:
   case 0x16:
   case 0x17:
-    return d; // TODO
+    return d; // A5.3.1 load/store register offset, TODO
 
-  // A5.3.2 Load/store, immediate
-  case 0x18: // STR (immediate, word): 01100 imm5 Rn Rt
+  case 0x18: // STR (immediate) T1
   case 0x19:
     d.op = Instruction::STR_IMM;
-    d.rt = hw & 0x07;
-    d.rn = (hw >> 3) & 0x07;
-    d.imm = static_cast<uint32_t>((hw >> 6) & 0x1F) << 2;
+    d.rt = hw & 0x7;
+    d.rn = (hw >> 3) & 0x7;
+    d.imm = ((hw >> 6) & 0x1F) << 2;
     d.index = 1;
     d.add = 1;
-    return d; // TODO
+    return d;
 
-  case 0x1A: // LDR (immediate, word): 01101 imm5 Rn Rt
+  case 0x1A: // LDR (immediate) T1
   case 0x1B:
     d.op = Instruction::LDR_IMM;
     d.rt = hw & 0x7;
-    d.rn = (hw >> 3) & 0x07;
-    d.imm = static_cast<uint32_t>((hw >> 6) & 0x1F) << 2;
+    d.rn = (hw >> 3) & 0x7;
+    d.imm = ((hw >> 6) & 0x1F) << 2;
+    d.index = 1;
+    d.add = 1;
     d.cycles = 2;
     return d;
 
-  case 0x1C: // STRB (immediate)
-  case 0x1D:
-  case 0x1E: // LDRB (immediate)
-  case 0x1F:
+  case 0x1C:
+  case 0x1D: // STRB (immediate)
+  case 0x1E:
+  case 0x1F:  // LDRB (immediate)
     return d; // TODO
 
-  case 0x20: // A5.3.4 Load/store halfword immediate
-  case 0x21:
+  case 0x20:
+  case 0x21: // STRH (immediate)
   case 0x22:
-  case 0x23:
-  case 0x24: // A5.3.5 Load/store SP-relative
-  case 0x25:
-    d.op = Instruction::LDR_IMM;
-    d.rt = (hw >> 8) & 0x07;
-    d.imm = static_cast<uint32_t>(hw & 0xFF) << 2;
-    return d;
-  case 0x26:
-  case 0x27:
+  case 0x23:  // LDRH (immediate)
     return d; // TODO
 
-  case 0x28: // A7.7.1 ADR
+  case 0x24: // STR (SP-relative) T2
+  case 0x25:
+    d.op = Instruction::STR_IMM;
+    d.rt = (hw >> 8) & 0x7;
+    d.rn = 13;
+    d.imm = (hw & 0xFF) << 2;
+    d.index = 1;
+    d.add = 1;
+    return d;
+
+  case 0x26: // LDR (SP-relative) T2
+  case 0x27:
+    d.op = Instruction::LDR_IMM;
+    d.rt = (hw >> 8) & 0x7;
+    d.rn = 13;
+    d.imm = (hw & 0xFF) << 2;
+    d.index = 1;
+    d.add = 1;
+    d.cycles = 2;
+    return d;
+
+  case 0x28:
   case 0x29:
-  case 0x2A: // ADD (SP plus immediate)
+    return d; // ADR, TODO
+  case 0x2A:
   case 0x2B:
-  case 0x2C: // A5.4 Miscellaneous 16-bit instructions
+    return d; // ADD (SP plus immediate), TODO
+  case 0x2C:
   case 0x2D:
   case 0x2E:
   case 0x2F:
-  case 0x30: // A7.7.6 STM
+    return d; // A5.4 misc 16-bit (PUSH/POP/CPS/...), TODO
+  case 0x30:
   case 0x31:
-  case 0x32: // A7.7.7 LDM
+    return d; // STM, TODO
+  case 0x32:
   case 0x33:
-  case 0x34: // A7.7.8 B (conditional), A7.7.9 SVC, A7.7.10 UDF
+    return d; // LDM, TODO
+
+  case 0x34:
   case 0x35:
   case 0x36:
-  case 0x37: {
+  case 0x37: { // B<c>, SVC, UDF
+    uint8_t cond = (hw >> 8) & 0xF;
+    if (cond >= 0xE)
+      return d; // UDF / SVC, TODO
     d.op = Instruction::B_COND;
-    d.cond = (uint8_t)(hw >> 8) & 0x0F;
-    d.imm = ((hw & 0xFF) << 1);
-    d.cycles = 1; // TODO: Check this again
+    d.cond = cond;
+    d.imm = static_cast<uint32_t>(
+        static_cast<int32_t>(static_cast<int8_t>(hw & 0xFF)) * 2);
+    d.cycles = 1; // TODO: check
     return d;
   }
-  case 0x38: // A7.7.11 B (T2, unconditional)
+
+  case 0x38: // B (T2, unconditional)
   case 0x39:
   default:
-    // Unknown, or 32-bit prefix already filtered by clock(). Costs one tick
-    // so cycles never underflows.
-    return d;
+    return d; // TODO / unknown
   }
 }
 
@@ -410,6 +445,17 @@ void cpu::execute() {
     break;
   case Instruction::ADD_REG:
     ADD_REG();
+    break;
+  case Instruction::ADC_REG:
+    ADC_REG();
+    break;
+  case Instruction::SUB_IMM:
+    SUB_IMM();
+    break;
+  case Instruction::SUB_REG:
+    break;
+  case Instruction::BKPT:
+    BKPT();
     break;
   case Instruction::UNKNOWN:
     break;
@@ -526,7 +572,7 @@ uint8_t cpu::ADD_IMM() {
   bool carry = (unsigned_sum >> 32) & 1u;
   uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
 
-  if (!it_state) {
+  if (ins.flags) {
     SetFlag(N, (result32 >> 31) & 1u);
     SetFlag(C, carry);
     SetFlag(Z, result32 == 0);
@@ -556,11 +602,61 @@ uint8_t cpu::ADD_REG() {
   bool carry = (unsigned_sum >> 32) & 1u;
   uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
 
-  if (!it_state) {
+  if (ins.flags) {
     SetFlag(N, (result32 >> 31) & 1u);
     SetFlag(C, carry);
     SetFlag(Z, result32 == 0);
     SetFlag(V, sign_a == sign_b && sign_result != sign_a);
+  }
+
+  r[ins.rd] = result32;
+  return 0;
+}
+
+uint8_t cpu::ADC_REG() {
+
+  uint32_t operand1 = r[ins.rn];
+  uint32_t operand2 = r[ins.rm];
+
+  uint64_t unsigned_sum =
+      static_cast<uint64_t>(operand1) + operand2 + apsr_flag::C;
+
+  bool sign_a = (operand1 >> 31) & 1u;
+  bool sign_b = (operand2 >> 31) & 1u;
+  bool sign_result = (unsigned_sum >> 31) & 1u;
+
+  bool carry = (unsigned_sum >> 32) & 1u;
+  uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
+
+  if (ins.flags) {
+    SetFlag(N, (result32 >> 31) & 1u);
+    SetFlag(C, carry);
+    SetFlag(Z, result32 == 0);
+    SetFlag(V, sign_a == sign_b && sign_result != sign_a);
+  }
+
+  r[ins.rd] = result32;
+  return 0;
+}
+
+uint8_t cpu::SUB_IMM() {
+
+  uint64_t unsigned_sum =
+      static_cast<uint64_t>(r[ins.rn]) +
+      static_cast<uint32_t>(~static_cast<uint32_t>(ins.imm)) + 1;
+
+  bool sign_a = (r[ins.rn] >> 31) & 1u;
+  bool sign_b = (ins.imm >> 31) & 1u;
+  bool sign_result = (unsigned_sum >> 31) & 1u;
+
+  bool carry = (unsigned_sum >> 32) & 1u;
+  uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
+
+  if (ins.flags) {
+    SetFlag(N, (result32 >> 31) & 1u);
+    SetFlag(Z, result32 == 0);
+    SetFlag(C, carry);
+    SetFlag(V, sign_a != sign_b && sign_result != sign_a);
   }
 
   r[ins.rd] = result32;
@@ -590,6 +686,31 @@ uint8_t cpu::STR_IMM() {
   return 0;
 }
 
+uint8_t cpu::BKPT() {
+
+  std::ostringstream oss;
+  oss << "CHECK 0x" << std::hex << pc;
+
+  std::string output = oss.str();
+  m_bus->m_out.push_back(output);
+  if (ins.imm == 0xAB && semihost_out) {
+
+    switch (reg(0)) {
+    case 0x03: // SYS_WRITEC: r1 = address of one char
+      semihost_out(std::string(1, (char)m_bus->read8(reg(1))));
+      break;
+    case 0x04: { // SYS_WRITE0: r1 = address of a NUL-terminated string
+      std::string s;
+      for (uint32_t a = reg(1); m_bus->read8(a) != 0; ++a)
+        s += (char)m_bus->read8(a);
+      semihost_out(s);
+      break;
+    }
+    }
+  }
+  return 0;
+}
+
 namespace {
 
 std::string hex(uint32_t value, int digits) {
@@ -599,77 +720,113 @@ std::string hex(uint32_t value, int digits) {
   return s;
 }
 
-// Mnemonic plus operand text for a decoded Thumb-16 instruction. `addr` is the
-// instruction address, used for PC-relative effective address display.
+} // namespace
+
+static const char *reg_name(uint32_t r) {
+  static const char *names[] = {"r0",  "r1", "r2", "r3", "r4",  "r5",
+                                "r6",  "r7", "r8", "r9", "r10", "r11",
+                                "r12", "sp", "lr", "pc"};
+  return names[r & 0xF];
+}
+
 std::string format_thumb16(uint16_t hw, uint32_t addr) {
-  // LDR (literal): 01001 Rt imm8
-  if ((hw >> 11) == 0b01001) {
-    uint32_t rt = (hw >> 8) & 0x7;
-    uint32_t offset = static_cast<uint32_t>(hw & 0xFF) << 2;
+  const uint32_t rd3 = hw & 0x7;
+  const uint32_t rn3 = (hw >> 3) & 0x7;
+  const uint32_t rm3 = (hw >> 6) & 0x7;
+  const uint32_t rd8 = (hw >> 8) & 0x7;
+  const uint32_t imm8 = hw & 0xFF;
+
+  // MOVS rd, rm (LSL #0) T2
+  if ((hw >> 6) == 0) {
+    return std::string("MOVS ") + reg_name(rd3) + ", " + reg_name(rn3);
+  }
+
+  // ADC (register) T1: 0100000101
+  if ((hw >> 6) == 0b0100000101) {
+    return std::string("ADCS ") + reg_name(rd3) + ", " + reg_name(rn3);
+  }
+
+  // MOV (register) T1: 01000110 D Rm Rd
+  if ((hw >> 8) == 0x46) {
+    uint32_t rd = rd3 | (((hw >> 7) & 1) << 3);
+    uint32_t rm = (hw >> 3) & 0xF;
+    return std::string("MOV ") + reg_name(rd) + ", " + reg_name(rm);
+  }
+
+  // ADD/SUB (register / imm3) T1: 000110x / 000111x
+  switch (hw >> 9) {
+  case 0b0001100:
+    return std::string("ADDS ") + reg_name(rd3) + ", " + reg_name(rn3) + ", " +
+           reg_name(rm3);
+  case 0b0001101:
+    return std::string("SUBS ") + reg_name(rd3) + ", " + reg_name(rn3) + ", " +
+           reg_name(rm3);
+  case 0b0001110:
+    return std::string("ADDS ") + reg_name(rd3) + ", " + reg_name(rn3) + ", #" +
+           std::to_string(rm3);
+  case 0b0001111:
+    return std::string("SUBS ") + reg_name(rd3) + ", " + reg_name(rn3) + ", #" +
+           std::to_string(rm3);
+  }
+
+  switch (hw >> 11) {
+  case 0b00100: // MOVS rd, #imm8
+    return std::string("MOVS ") + reg_name(rd8) + ", #" + std::to_string(imm8);
+
+  case 0b00101: // CMP rn, #imm8
+    return std::string("CMP ") + reg_name(rd8) + ", #" + std::to_string(imm8);
+
+  case 0b00110: // ADDS rdn, #imm8
+    return std::string("ADDS ") + reg_name(rd8) + ", #" + std::to_string(imm8);
+
+  case 0b00111: // SUBS rdn, #imm8
+    return std::string("SUBS ") + reg_name(rd8) + ", #" + std::to_string(imm8);
+
+  case 0b01001: { // LDR (literal)
+    uint32_t offset = imm8 << 2;
     uint32_t target = ((addr + 4) & ~0x3u) + offset;
-    return "LDR r" + std::to_string(rt) + ", [pc, #" + std::to_string(offset) +
-           "] ; $" + hex(target, 8);
+    return std::string("LDR ") + reg_name(rd8) + ", [pc, #" +
+           std::to_string(offset) + "] ; $" + hex(target, 8);
   }
 
-  // LDR (immediate, word): 01101 imm5 Rn Rt
-  if ((hw >> 11) == 0b01101) {
-    uint32_t rt = hw & 0x7;
-    uint32_t rn = (hw >> 3) & 0x7;
-    uint32_t offset = static_cast<uint32_t>((hw >> 6) & 0x1F) << 2;
-    return "LDR r" + std::to_string(rt) + ", [r" + std::to_string(rn) + ", #" +
-           std::to_string(offset) + "]";
+  case 0b01100:   // STR (immediate)
+  case 0b01101: { // LDR (immediate)
+    uint32_t offset = ((hw >> 6) & 0x1F) << 2;
+    return std::string((hw >> 11) & 1 ? "LDR " : "STR ") + reg_name(rd3) +
+           ", [" + reg_name(rn3) + ", #" + std::to_string(offset) + "]";
   }
 
-  // STR (immediate, word): 01100 imm5 Rn Rt
-  if ((hw >> 11) == 0b01100) {
-    uint32_t rt = hw & 0x7;
-    uint32_t rn = (hw >> 3) & 0x7;
-    uint32_t imm5 = (hw >> 6) & 0x1F;
-    uint32_t offset = imm5 << 2;
-
-    return "STR r" + std::to_string(rt) + ", [r" + std::to_string(rn) + ", #" +
-           std::to_string(offset) + "]";
+  case 0b10010:   // STR (SP-relative)
+  case 0b10011: { // LDR (SP-relative)
+    uint32_t offset = imm8 << 2;
+    return std::string((hw >> 11) & 1 ? "LDR " : "STR ") + reg_name(rd8) +
+           ", [sp, #" + std::to_string(offset) + "]";
+  }
   }
 
-  if ((hw >> 11) == 0b00100) {
-    uint32_t rd = (hw >> 8) & 0x7;
-    uint32_t imm8 = hw & 0xFF;
-
-    return "MOVS r" + std::to_string(rd) + ", #" + std::to_string(imm8);
-  }
-
+  // B<c>, SVC, UDF: 1101 cond imm8
   if ((hw >> 12) == 0b1101) {
     uint32_t cond = (hw >> 8) & 0xF;
+    if (cond == 0xE)
+      return "UDF #" + std::to_string(imm8);
+    if (cond == 0xF)
+      return "SVC #" + std::to_string(imm8);
 
-    if (cond == 0b1110)
-      return "UDF";
-
-    if (cond == 0b1111)
-      return "SVC";
-
-    int32_t offset = static_cast<int8_t>((hw & 0xFF) << 1);
+    int32_t offset = static_cast<int32_t>(static_cast<int8_t>(imm8)) * 2;
     uint32_t target = addr + 4 + offset;
 
     static const char *conditions[] = {"EQ", "NE", "CS", "CC", "MI",
                                        "PL", "VS", "VC", "HI", "LS",
                                        "GE", "LT", "GT", "LE"};
-
-    return "B" + std::string(conditions[cond]) + " $" + hex(target, 8);
+    return std::string("B") + conditions[cond] + " $" + hex(target, 8);
   }
 
-  if ((hw >> 9) == 0b0001110) {
-    uint32_t rd = hw & 0x7;
-    uint32_t rn = (hw >> 3) & 0x7;
-    uint32_t imm3 = (hw >> 6) & 0x7;
-
-    return "ADDS r" + std::to_string(rd) + ", r" + std::to_string(rn) + ", #" +
-           std::to_string(imm3);
+  if ((hw & 0xFF00) == 0xBE00) {
+    return "BKPT #" + hex(imm8, 2);
   }
 
   return "TODO " + hex(hw, 4);
 }
-
-} // namespace
 
 std::string cpu::disassemble(uint32_t address, uint8_t &length) const {
   std::string s = "$" + hex(address, 8) + ": ";

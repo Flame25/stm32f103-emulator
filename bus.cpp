@@ -52,3 +52,20 @@ void bus::load_flash(uint32_t address, const uint8_t *src, std::size_t count) {
   for (std::size_t i = 0; i < count; ++i)
     write8_flash(address + static_cast<uint32_t>(i), src[i]);
 }
+
+// Call this from the CPU whenever the program prints something.
+void bus::append_output(const std::string &s) {
+  for (char c : s) {
+    if (c == '\r')
+      continue;
+    if (c == '\n') {
+      m_out.emplace_back();
+      continue;
+    }
+    if (static_cast<int>(m_out.back().size()) >= kOutCols)
+      m_out.emplace_back();
+    m_out.back() += c;
+  }
+  while (m_out.size() > 200) // keep memory bounded
+    m_out.erase(m_out.begin());
+}

@@ -37,7 +37,7 @@ public:
     DrawRam(2, 2, 0x0000, 8, 8);
     DrawCpu(300, 2);
     DrawCode(300, 100, 20);
-
+    DrawOutput(2, 315, 674, 100);
     DrawString(2, 110, "SPACE = Step Instruction  R = RESET");
 
     return true;
@@ -51,16 +51,18 @@ private:
   void loadTestProgram() {
     const uint8_t program[] = {
         // 0x02, 0x48,             // 0x0000: LDR  R0, [PC, #8]
-        0x01, 0xD0,             // 0x0002: BEQ  +2
-        0x07, 0x21,             // 0x0004: MOVS R1, #7
-        0x08, 0x22,             // MOVS R2, #3
-        0x08, 0x23,             // MOVS R2, #3
-        0xC8, 0x1C,             // 0x0006: ADDS R0, R1, #3
-        0xBF, 0x21,             // MOVS R1, #5
-        0xBF, 0x22,             // MOVS R2, #3
-        0x88, 0x18,             // ADDS R0, R1, R2
-        0x58, 0x60,             // STR R0, [R1, #4]
-        0xEF, 0xBE, 0xAD, 0xDE, // 0x0008: 0xDEADBEEF
+        0x01, 0xD0, // 0x0002: BEQ  +2
+        0x07, 0x21, // 0x0004: MOVS R1, #7
+        0x08, 0x22, // MOVS R2, #3
+        0x08, 0x23, // MOVS R3, #3
+        0xC8, 0x1C, // 0x0006: ADDS R0, R1, #3
+        0xBF, 0x21, // MOVS R1, #191
+        0xBF, 0x22, // MOVS R2, #191
+        0x88, 0x18, // ADDS R0, R1, R2
+        0x58, 0x60, // STR R0, [R3, #4]
+        0x0A, 0x20, // MOVS R0, #10
+        0x88, 0x1E, // SUBS R0, R0, #3
+        0xAB, 0xBE, // BKPT #0xAB
     };
     m_bus.load_flash(0x0000, program, sizeof(program));
   }
@@ -82,6 +84,27 @@ private:
       }
       DrawString(x, nRamY, sOffset);
       nRamY += 10;
+    }
+  }
+
+  void DrawOutput(int x, int y, int w, int h) {
+    DrawRect(x, y, w, h, olc::WHITE);
+    DrawString(x + 4, y + 4, "Semihosting Output", olc::YELLOW);
+    DrawLine(x, y + 14, x + w, y + 14, olc::WHITE);
+
+    const int visible_lines = 8;
+    const int total = static_cast<int>(m_bus.m_out.size());
+
+    // Show only the latest 5 lines
+    const int first = std::max(0, total - visible_lines);
+
+    int ly = y + 18;
+
+    for (int i = first; i < total; ++i) {
+      olc::Pixel color = (i == total - 1) ? olc::GREEN : olc::WHITE;
+
+      DrawString(x + 4, ly, m_bus.m_out[i], color);
+      ly += 10;
     }
   }
 

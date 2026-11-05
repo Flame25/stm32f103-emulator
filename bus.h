@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 class bus {
 public:
@@ -28,6 +30,12 @@ public:
 
   void write32(uint32_t address, uint32_t value);
 
+  std::vector<std::string> m_out;
+
   // Copy a program image into memory. Out-of-range bytes are dropped.
   void load_flash(uint32_t address, const uint8_t *src, std::size_t count);
+  void append_output(const std::string &s);
+
+  const int kOutCols = 80;  // chars per line (8 px each)
+  const int kOutLines = 15; // visible lines (10 px each)
 };
