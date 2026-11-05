@@ -51,21 +51,53 @@ private:
   // 0x01, 0xD0,          // 0x0002: BEQ  +2
 
   void loadTestProgram() {
+    // TODO: More proper testing methods / platform
+    //
+    // const uint8_t program[] = {
+    //     0x02, 0x48, // 0x0000: LDR  R0, [PC, #8]
+    //     0x07, 0x21, // 0x0004: MOVS R1, #7
+    //     0x08, 0x22, // MOVS R2, #3
+    //     0x08, 0x23, // MOVS R3, #3
+    //     0xC8, 0x1C, // 0x0006: ADDS R0, R1, #3
+    //     0xBF, 0x21, // MOVS R1, #191
+    //     0xBF, 0x22, // MOVS R2, #191
+    //     0x88, 0x18, // ADDS R0, R1, R2
+    //     0x58, 0x60, // STR R0, [R3, #4]
+    //     0x0A, 0x20, // MOVS R0, #10
+    //     0x88, 0x1E, // SUBS R0, R0, #3
+    //     0xF6, 0xE7, // B (Uncond)
+    //     0xAB, 0xBE, // BKPT #0xAB
+    // };
+    //
+    // const uint8_t program[] = {
+    //     // Test 1: Equal (5 == 5)
+    //     0x05, 0x21, // MOVS R1, #5
+    //     0x05, 0x29, // CMP R1, #5
+    //
+    //     // Test 2: Greater (10 > 5)
+    //     0x0A, 0x21, // MOVS R1, #10
+    //     0x05, 0x29, // CMP R1, #5
+    //
+    //     // Test 3: Less (3 < 5)
+    //     0x03, 0x21, // MOVS R1, #3
+    //     0x05, 0x29, // CMP R1, #5
+    //
+    //     // Test 4: Zero compared with zero
+    //     0x00, 0x21, // MOVS R1, #0
+    //     0x00, 0x29, // CMP R1, #0
+    //
+    //     0xFE, 0xE7 // B .
+    // };
+
     const uint8_t program[] = {
-        0x02, 0x48, // 0x0000: LDR  R0, [PC, #8]
-        0x07, 0x21, // 0x0004: MOVS R1, #7
-        0x08, 0x22, // MOVS R2, #3
-        0x08, 0x23, // MOVS R3, #3
-        0xC8, 0x1C, // 0x0006: ADDS R0, R1, #3
-        0xBF, 0x21, // MOVS R1, #191
-        0xBF, 0x22, // MOVS R2, #191
-        0x88, 0x18, // ADDS R0, R1, R2
-        0x58, 0x60, // STR R0, [R3, #4]
-        0x0A, 0x20, // MOVS R0, #10
-        0x88, 0x1E, // SUBS R0, R0, #3
-        0xF6, 0xE7, // B (Uncond)
-        0xAB, 0xBE, // BKPT #0xAB
+        0x05, 0x20, // 0x0000: MOVS R0, #5
+        0x05, 0x28, // 0x0002: CMP R0, #5
+        0x02, 0xD0, // 0x0004: BEQ +2 (placeholder for now)
+        0x01, 0x21, // 0x0006: MOVS R1, #1 (should be skipped)
+        0x02, 0x21, // 0x0008: MOVS R1, #2
+        0xFE, 0xE7  // 0x000A: B . (infinite loop)
     };
+
     m_bus.load_flash(0x0000, program, sizeof(program));
   }
 

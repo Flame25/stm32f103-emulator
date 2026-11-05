@@ -215,7 +215,10 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
 
   case 0x0A: // CMP (immediate) T1
   case 0x0B:
-    return d; // TODO
+    d.op = Instruction::CMP_IMM;
+    d.rn = (hw >> 8) & 0x07;
+    d.imm = static_cast<uint32_t>(hw & 0xFF);
+    return d;
 
   case 0x0C: // ADD (immediate) T2
   case 0x0D:
@@ -441,6 +444,9 @@ void cpu::execute() {
   case Instruction::BL:
     BL();
     break;
+  case Instruction::CMP_IMM:
+    CMP_IMM();
+    break;
   case Instruction::MOV_IMM:
     MOV_IMM();
     break;
@@ -540,6 +546,27 @@ uint8_t cpu::BL() {
   r[14] = (pc + 4) | 1u; // return address, Thumb bit set
   pc = pc + 4 + ins.imm;
   pc_written = true;
+  return 0;
+}
+
+uint8_t cpu::CMP_IMM() {
+
+  uint64_t unsigned_sum =
+      static_cast<uint64_t>(r[ins.rn]) +
+      static_cast<uint32_t>(~static_cast<uint32_t>(ins.imm)) + 1;
+
+  bool sign_a = (r[ins.rn] >> 31) & 1u;
+  bool sign_b = (ins.imm >> 31) & 1u;
+  bool sign_result = (unsigned_sum >> 31) & 1u;
+
+  bool carry = (unsigned_sum >> 32) & 1u;
+  uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
+
+  SetFlag(N, (result32 >> 31) & 1u);
+  SetFlag(Z, result32 == 0);
+  SetFlag(C, carry);
+  SetFlag(V, sign_a != sign_b && sign_result != sign_a);
+
   return 0;
 }
 
@@ -820,6 +847,11 @@ std::string format_thumb16(uint16_t hw, uint32_t addr) {
     uint32_t offset = imm8 << 2;
     return std::string((hw >> 11) & 1 ? "LDR " : "STR ") + reg_name(rd8) +
            ", [sp, #" + std::to_string(offset) + "]";
+  }
+
+  case 0b11100: { // B Unconditional T2
+    uint32_t offset = static_cast<int32_t>(
+        static_cast<int32_t>(static_cast<int16_t>((hw & 0x7FF) << 5) >> 4));
   }
   }
 

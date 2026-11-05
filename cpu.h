@@ -67,6 +67,8 @@ private:
     B_COND, // A7.7.8  B<c>.W
     B_W,    // A7.7.11 B (T4)
     BL,     // A7.7.9  BL (immediate)
+    CMP_IMM,
+    CMP_REG,
     MOV_IMM,
     MOV_REG,
     ADD_IMM,
@@ -140,6 +142,7 @@ private:
   uint8_t B();
   uint8_t B_W();
   uint8_t BL();
+  uint8_t CMP_IMM();
   uint8_t MOV_IMM();
   uint8_t MOV_REG();
   uint8_t ADD_IMM();
