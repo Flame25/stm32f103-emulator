@@ -335,7 +335,14 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
   }
 
   case 0x38: // B (T2, unconditional)
-  case 0x39:
+  case 0x39: {
+    d.op = Instruction::B;
+    d.imm = static_cast<uint32_t>(
+        static_cast<int32_t>(static_cast<int16_t>((hw & 0x7FF) << 5) >> 4));
+    d.cycles = 1;
+    d.cond = 0x0;
+  }
+
   default:
     return d; // TODO / unknown
   }
@@ -422,6 +429,9 @@ void cpu::execute() {
   case Instruction::LDR_IMM:
     LDR_IMM();
     break;
+  case Instruction::B:
+    B();
+    break;
   case Instruction::B_COND:
     B_COND();
     break;
@@ -503,9 +513,18 @@ uint8_t cpu::LDR_IMM() {
 // A7.7.12 B<c> (T3): if ConditionPassed() then BranchWritePC(PC + imm32)
 uint8_t cpu::B_COND() {
   if (condition_passed(ins.cond)) {
-    pc = pc + 4 + ins.imm; // PC reads as insn_addr + 4 on M-profile
+    pc =
+        pc + 4 +
+        static_cast<int32_t>(ins.imm); // PC reads as insn_addr + 4 on M-profile
     pc_written = true;
   }
+  return 0;
+}
+
+// B (T2): BranchWritePC(PC + imm32)
+uint8_t cpu::B() {
+  pc = pc + 4 + static_cast<int32_t>(ins.imm);
+  pc_written = true;
   return 0;
 }
 

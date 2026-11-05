@@ -48,10 +48,11 @@ private:
   cpu m_cpu{m_bus};
   std::map<uint32_t, std::string> m_asm;
 
+  // 0x01, 0xD0,          // 0x0002: BEQ  +2
+
   void loadTestProgram() {
     const uint8_t program[] = {
-        // 0x02, 0x48,             // 0x0000: LDR  R0, [PC, #8]
-        0x01, 0xD0, // 0x0002: BEQ  +2
+        0x02, 0x48, // 0x0000: LDR  R0, [PC, #8]
         0x07, 0x21, // 0x0004: MOVS R1, #7
         0x08, 0x22, // MOVS R2, #3
         0x08, 0x23, // MOVS R3, #3
@@ -62,6 +63,7 @@ private:
         0x58, 0x60, // STR R0, [R3, #4]
         0x0A, 0x20, // MOVS R0, #10
         0x88, 0x1E, // SUBS R0, R0, #3
+        0xF6, 0xE7, // B (Uncond)
         0xAB, 0xBE, // BKPT #0xAB
     };
     m_bus.load_flash(0x0000, program, sizeof(program));

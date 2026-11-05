@@ -63,6 +63,7 @@ private:
     LDR_LITERAL,
     LDR_IMM,
     STR_IMM,
+    B,
     B_COND, // A7.7.8  B<c>.W
     B_W,    // A7.7.11 B (T4)
     BL,     // A7.7.9  BL (immediate)
@@ -136,6 +137,7 @@ private:
   uint8_t LDR_LITERAL();
   uint8_t LDR_IMM();
   uint8_t B_COND();
+  uint8_t B();
   uint8_t B_W();
   uint8_t BL();
   uint8_t MOV_IMM();
