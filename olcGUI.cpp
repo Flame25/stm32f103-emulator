@@ -92,13 +92,16 @@ private:
     const uint8_t program[] = {
         0x05, 0x20, // 0x0000: MOVS R0, #5
         0x05, 0x28, // 0x0002: CMP R0, #5
-        0x02, 0xD0, // 0x0004: BEQ +2 (placeholder for now)
-        0x01, 0x21, // 0x0006: MOVS R1, #1 (should be skipped)
-        0x02, 0x21, // 0x0008: MOVS R1, #2
+        // 0x02, 0xD0, // 0x0004: BEQ +2 (placeholder for now)
+        0x02, 0x21, // 0x0006: MOVS R1, #1 (should be skipped)
+        0x05, 0x22, // 0x0008: MOVS R2, #5
+        0x0A, 0x40, // ANDS R1, R2
         0xFE, 0xE7  // 0x000A: B . (infinite loop)
     };
 
     m_bus.load_flash(0x0000, program, sizeof(program));
+
+    // m_bus.load_program("./flash.bin");
   }
 
   static std::string hex(uint32_t n, int d) {

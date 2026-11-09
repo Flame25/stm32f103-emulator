@@ -143,8 +143,10 @@ private:
   uint8_t B_W();
   uint8_t BL();
   uint8_t CMP_IMM();
+  uint8_t CMP_REG();
   uint8_t MOV_IMM();
   uint8_t MOV_REG();
+  uint8_t AND_REG();
   uint8_t ADD_IMM();
   uint8_t ADD_REG();
   uint8_t ADC_REG();

@@ -1,5 +1,7 @@
 #include "bus.h"
 
+using std::vector;
+
 uint8_t bus::read8(uint32_t address) const {
   // TODO: no bounds check yet. Out-of-range reads silently return 0.
   if (address >= sizeof(sram))
@@ -51,6 +53,20 @@ void bus::write32(uint32_t address, uint32_t value) {
 void bus::load_flash(uint32_t address, const uint8_t *src, std::size_t count) {
   for (std::size_t i = 0; i < count; ++i)
     write8_flash(address + static_cast<uint32_t>(i), src[i]);
+}
+
+void bus::load_program(const std::string &path) {
+  std::ifstream file(path, std::ios::binary);
+
+  if (!file) {
+    throw std::runtime_error("Failed to open program");
+  }
+
+  vector<uint8_t> buffer((std::istreambuf_iterator<char>(file)),
+                         std::istreambuf_iterator<char>());
+
+  for (std::size_t i = 0; i < buffer.size(); ++i)
+    write8_flash(0x0000 + static_cast<uint32_t>(i), buffer[i]);
 }
 
 // Call this from the CPU whenever the program prints something.

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -34,6 +35,7 @@ public:
 
   // Copy a program image into memory. Out-of-range bytes are dropped.
   void load_flash(uint32_t address, const uint8_t *src, std::size_t count);
+  void load_program(const std::string &path);
   void append_output(const std::string &s);
 
   const int kOutCols = 80;  // chars per line (8 px each)

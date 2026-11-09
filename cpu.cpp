@@ -170,6 +170,21 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
     return d;
   }
 
+  if ((hw >> 6) == 0b0100000000) { // AND (register) T1
+    d.op = Instruction::AND_REG;
+    d.rm = (hw >> 3) & 0x7;
+    d.rn = hw & 0x7;
+    d.flags = !it_state;
+    return d;
+  }
+
+  if ((hw >> 6) == 0b0100001010) { // CMP (register) T1
+    d.op = Instruction::CMP_REG;
+    d.rm = (hw >> 3) & 0x7;
+    d.rn = hw & 0x7;
+    return d;
+  }
+
   if ((hw >> 8) == 0x46) { // MOV (register) T1
     d.op = Instruction::MOV_REG;
     d.rm = (hw >> 3) & 0xF;
@@ -182,6 +197,7 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
     d.op = Instruction::BKPT;
     d.imm = static_cast<uint32_t>(hw & 0xFF);
     d.cycles = 3;
+    return d;
   }
 
   switch (hw >> 9) { // add/sub reg/imm3
@@ -344,6 +360,7 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
         static_cast<int32_t>(static_cast<int16_t>((hw & 0x7FF) << 5) >> 4));
     d.cycles = 1;
     d.cond = 0x0;
+    return d;
   }
 
   default:
@@ -447,6 +464,9 @@ void cpu::execute() {
   case Instruction::CMP_IMM:
     CMP_IMM();
     break;
+  case Instruction::CMP_REG:
+    CMP_REG();
+    break;
   case Instruction::MOV_IMM:
     MOV_IMM();
     break;
@@ -458,6 +478,9 @@ void cpu::execute() {
     break;
   case Instruction::ADD_IMM:
     ADD_IMM();
+    break;
+  case Instruction::AND_REG:
+    AND_REG();
     break;
   case Instruction::ADD_REG:
     ADD_REG();
@@ -570,6 +593,27 @@ uint8_t cpu::CMP_IMM() {
   return 0;
 }
 
+uint8_t cpu::CMP_REG() {
+
+  uint64_t unsigned_sum =
+      static_cast<uint64_t>(r[ins.rn]) +
+      static_cast<uint32_t>(~static_cast<uint32_t>(r[ins.rm])) + 1;
+
+  bool sign_a = (r[ins.rn] >> 31) & 1u;
+  bool sign_b = (ins.imm >> 31) & 1u;
+  bool sign_result = (unsigned_sum >> 31) & 1u;
+
+  bool carry = (unsigned_sum >> 32) & 1u;
+  uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
+
+  SetFlag(N, (result32 >> 31) & 1u);
+  SetFlag(C, carry);
+  SetFlag(Z, result32 == 0);
+  SetFlag(V, sign_a != sign_b && sign_result != sign_a);
+
+  return 0;
+}
+
 uint8_t cpu::MOV_IMM() {
   uint32_t result = ins.imm;
   r[ins.rd] = result;
@@ -603,6 +647,20 @@ uint8_t cpu::MOV_REG() {
   } else {
 
     // TODO: Last in ITBlock
+  }
+  return 0;
+}
+
+uint8_t cpu::AND_REG() {
+
+  uint32_t result = r[ins.rn] & r[ins.rm];
+
+  r[ins.rn] = result;
+
+  if (ins.flags) {
+    SetFlag(N, (result >> 31) & 1u);
+    SetFlag(Z, result == 0);
+    // TODO: Set Flag C not implemented since T1 doesnt do shift
   }
   return 0;
 }
@@ -790,6 +848,10 @@ std::string format_thumb16(uint16_t hw, uint32_t addr) {
   // ADC (register) T1: 0100000101
   if ((hw >> 6) == 0b0100000101) {
     return std::string("ADCS ") + reg_name(rd3) + ", " + reg_name(rn3);
+  }
+
+  if ((hw >> 6) == 0b0100000000) {
+    return std::string("ANDS ") + reg_name(rd3) + ", " + reg_name(rn3);
   }
 
   // MOV (register) T1: 01000110 D Rm Rd
