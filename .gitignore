@@ -1,1 +1,7 @@
 build/
+*.o
+*.bin
+*.elf
+*.map
+compile_commands.json
+.cache/
