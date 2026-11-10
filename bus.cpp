@@ -1,27 +1,25 @@
 #include "bus.h"
 
+#include <stdexcept>
+
 using std::vector;
 
+// One decoder, selected by address. `address - base < size` is used everywhere
+// because it is correct for any address (unsigned wrap turns an address below
+// the region into a huge value, so the compare fails) and needs no overflow
+// checks.
 uint8_t bus::read8(uint32_t address) const {
-  // TODO: no bounds check yet. Out-of-range reads silently return 0.
-  if (address >= sizeof(sram))
-    return 0;
-  return sram[address];
-}
-
-uint8_t bus::read8_flash(uint32_t address) const {
-  if (address >= sizeof(sram))
-    return 0;
-  return flash[address];
+  if (address - kFlashBase < kFlashSize) // 0x08000000.. flash
+    return flash[address - kFlashBase];
+  if (address < kFlashSize) // 0x00000000.. boot alias of flash
+    return flash[address];
+  if (address - kSramBase < kSramSize) // 0x20000000.. SRAM
+    return sram[address - kSramBase];
+  return 0; // TODO: BusFault
 }
 
 uint16_t bus::read16(uint32_t address) const {
   return static_cast<uint16_t>(read8(address) | (read8(address + 1) << 8));
-}
-
-uint16_t bus::read16_flash(uint32_t address) const {
-  return static_cast<uint16_t>(read8_flash(address) |
-                               (read8_flash(address + 1) << 8));
 }
 
 uint32_t bus::read32(uint32_t address) const {
@@ -32,15 +30,19 @@ uint32_t bus::read32(uint32_t address) const {
 }
 
 void bus::write8(uint32_t address, uint8_t value) {
-  if (address >= sizeof(sram))
+  // Flash writes need the unlock + erase sequence, so they are ignored here.
+  if (address - kFlashBase < kFlashSize)
     return;
-  sram[address] = value;
+  if (address - kSramBase < kSramSize) {
+    sram[address - kSramBase] = value;
+    return;
+  }
+  // TODO: BusFault
 }
 
-void bus::write8_flash(uint32_t address, uint8_t value) {
-  if (address >= sizeof(flash))
-    return;
-  flash[address] = value;
+void bus::write16(uint32_t address, uint16_t value) {
+  write8(address, static_cast<uint8_t>(value & 0xFF));
+  write8(address + 1, static_cast<uint8_t>((value >> 8) & 0xFF));
 }
 
 void bus::write32(uint32_t address, uint32_t value) {
@@ -51,8 +53,11 @@ void bus::write32(uint32_t address, uint32_t value) {
 }
 
 void bus::load_flash(uint32_t address, const uint8_t *src, std::size_t count) {
-  for (std::size_t i = 0; i < count; ++i)
-    write8_flash(address + static_cast<uint32_t>(i), src[i]);
+  for (std::size_t i = 0; i < count; ++i) {
+    const uint32_t a = address + static_cast<uint32_t>(i);
+    if (a - kFlashBase < kFlashSize)
+      flash[a - kFlashBase] = src[i];
+  }
 }
 
 void bus::load_program(const std::string &path) {
@@ -65,12 +70,14 @@ void bus::load_program(const std::string &path) {
   vector<uint8_t> buffer((std::istreambuf_iterator<char>(file)),
                          std::istreambuf_iterator<char>());
 
-  for (std::size_t i = 0; i < buffer.size(); ++i)
-    write8_flash(0x0000 + static_cast<uint32_t>(i), buffer[i]);
+  load_flash(kFlashBase, buffer.data(), buffer.size());
 }
 
 // Call this from the CPU whenever the program prints something.
 void bus::append_output(const std::string &s) {
+  if (m_out.empty())
+    m_out.emplace_back();
+
   for (char c : s) {
     if (c == '\r')
       continue;

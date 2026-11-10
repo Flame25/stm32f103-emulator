@@ -7,6 +7,8 @@
 #include <sstream>
 #include <string>
 
+#define S
+
 // ARM Cortex M3 Core
 class cpu {
 public:
@@ -43,8 +45,6 @@ public:
 
   uint16_t read(uint32_t address) const;
 
-  uint16_t read_flash(uint32_t address) const;
-
   uint32_t read32(uint32_t address) const;
 
 private:
@@ -71,6 +71,9 @@ private:
     CMP_REG,
     MOV_IMM,
     MOV_REG,
+    PUSH,
+    POP,
+    BX_REG,
     ADD_IMM,
     ADD_REG,
     ADC_REG,
@@ -102,10 +105,11 @@ private:
   // Register following ARM Cortex M3 datasheet
   uint32_t r[16]{}; // r[13]=SP r[14]=LR r[15]=PC(addr of current insn)
   uint32_t pc = 0x00;
-  uint32_t xpsr{}; // N Z C V Q T (APSR) + IPSR[8:0] + EPSR
+  uint32_t vtor = 0x00000000; // Vector Table Offset Register (SCB->VTOR)
+  uint32_t xpsr{};            // N Z C V Q T (APSR) + IPSR[8:0] + EPSR
   uint8_t it_state = 0;
 
-  uint16_t clock_count = 0;
+  uint32_t clock_count = 0;
   uint8_t cycles = 0;
 
   std::function<void(const std::string &)> semihost_out;
@@ -146,10 +150,14 @@ private:
   uint8_t CMP_REG();
   uint8_t MOV_IMM();
   uint8_t MOV_REG();
+  uint8_t PUSH();
+  uint8_t POP();
+  uint8_t BX_REG();
   uint8_t AND_REG();
   uint8_t ADD_IMM();
   uint8_t ADD_REG();
   uint8_t ADC_REG();
   uint8_t SUB_IMM();
+  uint8_t SUB_REG();
   uint8_t BKPT();
 };

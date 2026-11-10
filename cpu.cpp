@@ -19,20 +19,26 @@ cpu::cpu(bus &b) : m_bus(&b) {}
 void cpu::reset() {
   for (auto &reg : r)
     reg = 0;
-  pc = 0;
   xpsr = 0;
   it_state = 0;
   cycles = 0;
   clock_count = 0;
   pc_written = false;
   ins = decoded{};
+
+  // Hardware reset reads the vector table: word 0 is the initial SP, word 1
+  // the reset vector (bit 0 is the Thumb bit and is not part of the address).
+  r[13] = m_bus->read32(vtor);
+
+  // Basically ARM always run reset when its boot, and the reset handler with
+  // another interrupt as well fault handler located at this vector table after
+  // SP
+  //
+  // More information check B3.2 ARMv7-M DDI 0403E
+  pc = m_bus->read32(vtor + 0x04) & ~1u;
 }
 
 uint16_t cpu::read(uint32_t address) const { return m_bus->read16(address); }
-
-uint16_t cpu::read_flash(uint32_t address) const {
-  return m_bus->read16_flash(address);
-}
 
 uint32_t cpu::read32(uint32_t address) const { return m_bus->read32(address); }
 
@@ -120,7 +126,7 @@ void cpu::clock() {
 
   if (cycles == 0) {
 
-    uint16_t hw1 = read_flash(pc);
+    uint16_t hw1 = read(pc);
 
     bool wide = false;
 
@@ -128,7 +134,7 @@ void cpu::clock() {
     if ((hw1 >> 11) >= 0x1D) {
       // Second halfword sits at pc + 2. Fetching it with fetch16() would read
       // pc again and hand hw1 to the decoder as hw2.
-      ins = decode_thumb32(hw1, read_flash(pc + 2));
+      ins = decode_thumb32(hw1, read(pc + 2));
       wide = true;
     } else {
       ins = decode_thumb16(hw1);
@@ -190,6 +196,14 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
     d.rm = (hw >> 3) & 0xF;
     d.rd = (hw & 0x7) | (((hw >> 7) & 1) << 3);
     d.flags = false;
+    return d;
+  }
+
+  if ((hw & 0xFF87) == 0x4700) { // BX (T1) / BLX (T1): 0100 0111 L Rm 000
+    d.op = Instruction::BX_REG;
+    d.rm = (hw >> 3) & 0xF;
+    d.l_t = (hw >> 7) & 1; // 1 = BLX, link before branching
+    d.cycles = 3;
     return d;
   }
 
@@ -328,9 +342,22 @@ cpu::decoded cpu::decode_thumb16(uint16_t hw) {
     return d; // ADD (SP plus immediate), TODO
   case 0x2C:
   case 0x2D:
+    if ((hw & 0xFE00) == 0xB400) { // PUSH (T1) 1011 010 M reglist
+      d.op = Instruction::PUSH;
+      d.imm = hw & 0xFF;
+      d.l_t = (hw >> 8) & 1; // 1 = LR is pushed too
+      return d;
+    }
+    return d; // CPS / other misc, TODO
   case 0x2E:
   case 0x2F:
-    return d; // A5.4 misc 16-bit (PUSH/POP/CPS/...), TODO
+    if ((hw & 0xFE00) == 0xBC00) { // POP (T1) 1011 110 P reglist
+      d.op = Instruction::POP;
+      d.imm = hw & 0xFF;
+      d.l_t = (hw >> 8) & 1; // 1 = PC is popped too
+      return d;
+    }
+    return d; // CBZ/CBNZ, REV, etc., TODO
   case 0x30:
   case 0x31:
     return d; // STM, TODO
@@ -473,6 +500,15 @@ void cpu::execute() {
   case Instruction::MOV_REG:
     MOV_REG();
     break;
+  case Instruction::PUSH:
+    PUSH();
+    break;
+  case Instruction::POP:
+    POP();
+    break;
+  case Instruction::BX_REG:
+    BX_REG();
+    break;
   case Instruction::STR_IMM:
     STR_IMM();
     break;
@@ -492,6 +528,7 @@ void cpu::execute() {
     SUB_IMM();
     break;
   case Instruction::SUB_REG:
+    SUB_REG();
     break;
   case Instruction::BKPT:
     BKPT();
@@ -600,7 +637,7 @@ uint8_t cpu::CMP_REG() {
       static_cast<uint32_t>(~static_cast<uint32_t>(r[ins.rm])) + 1;
 
   bool sign_a = (r[ins.rn] >> 31) & 1u;
-  bool sign_b = (ins.imm >> 31) & 1u;
+  bool sign_b = (r[ins.rm] >> 31) & 1u;
   bool sign_result = (unsigned_sum >> 31) & 1u;
 
   bool carry = (unsigned_sum >> 32) & 1u;
@@ -630,7 +667,7 @@ uint8_t cpu::MOV_IMM() {
 }
 
 uint8_t cpu::MOV_REG() {
-  uint32_t result = ins.rm;
+  uint32_t result = r[ins.rm];
 
   if (it_state && ins.l_t == 2) {
     // UNPREDICTABLE
@@ -648,6 +685,66 @@ uint8_t cpu::MOV_REG() {
 
     // TODO: Last in ITBlock
   }
+  return 0;
+}
+
+// A7.7.91 PUSH (T1): full-descending, lowest register ends up at the lowest
+// address, so it is stored first. SP is always 4-byte aligned here (stack
+// alignment adjustment is A7.7.5 STMDB, not implemented yet).
+uint8_t cpu::PUSH() {
+  const bool push_lr = ins.l_t != 0;
+
+  // Count first so SP is decremented before any store (ARMv7-M keeps the
+  // stores ordered low register -> low address).
+  for (int i = 0; i < 8; ++i) {
+    if (ins.imm & (1u << i)) {
+      r[13] -= 4;
+      m_bus->write32(r[13], r[i]);
+    }
+  }
+
+  if (push_lr) {
+    r[13] -= 4;
+    m_bus->write32(r[13], r[14]);
+  }
+
+  return 0;
+}
+
+// A7.7.70 POP (T1): the inverse of PUSH, lowest register loaded from the
+// lowest address.
+uint8_t cpu::POP() {
+  const bool pop_pc = ins.l_t != 0;
+
+  for (int i = 0; i < 8; ++i) {
+    if (ins.imm & (1u << i)) {
+      r[i] = m_bus->read32(r[13]);
+      r[13] += 4;
+    }
+  }
+
+  if (pop_pc) {
+    const uint32_t value = m_bus->read32(r[13]);
+    r[13] += 4;
+    // Loading PC is a branch: Bit[0] selects ARM/Thumb and is stripped.
+    pc = value & ~1u;
+    pc_written = true;
+  }
+
+  return 0;
+}
+
+// A7.7.20 BX (T1) / A7.7.21 BLX (register, T1). M-profile is Thumb-only, so
+// Bit[0] == 0 is UNPREDICTABLE; treat it as the same Thumb branch.
+uint8_t cpu::BX_REG() {
+  const uint32_t target = r[ins.rm];
+
+  if (ins.l_t) { // BLX: LR = address of the next instruction, Thumb bit set
+    r[14] = (pc + 2) | 1u;
+  }
+
+  pc = target & ~1u;
+  pc_written = true;
   return 0;
 }
 
@@ -719,11 +816,11 @@ uint8_t cpu::ADD_REG() {
 
 uint8_t cpu::ADC_REG() {
 
-  uint32_t operand1 = r[ins.rn];
+  uint32_t operand1 = r[ins.rd];
   uint32_t operand2 = r[ins.rm];
+  const uint32_t carry_in = GetFlag(C) ? 1u : 0u;
 
-  uint64_t unsigned_sum =
-      static_cast<uint64_t>(operand1) + operand2 + apsr_flag::C;
+  uint64_t unsigned_sum = static_cast<uint64_t>(operand1) + operand2 + carry_in;
 
   bool sign_a = (operand1 >> 31) & 1u;
   bool sign_b = (operand2 >> 31) & 1u;
@@ -751,6 +848,29 @@ uint8_t cpu::SUB_IMM() {
 
   bool sign_a = (r[ins.rn] >> 31) & 1u;
   bool sign_b = (ins.imm >> 31) & 1u;
+  bool sign_result = (unsigned_sum >> 31) & 1u;
+
+  bool carry = (unsigned_sum >> 32) & 1u;
+  uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
+
+  if (ins.flags) {
+    SetFlag(N, (result32 >> 31) & 1u);
+    SetFlag(Z, result32 == 0);
+    SetFlag(C, carry);
+    SetFlag(V, sign_a != sign_b && sign_result != sign_a);
+  }
+
+  r[ins.rd] = result32;
+  return 0;
+}
+
+uint8_t cpu::SUB_REG() {
+  uint64_t unsigned_sum =
+      static_cast<uint64_t>(r[ins.rn]) +
+      static_cast<uint32_t>(~static_cast<uint32_t>(r[ins.rm])) + 1;
+
+  bool sign_a = (r[ins.rn] >> 31) & 1u;
+  bool sign_b = (r[ins.rm] >> 31) & 1u;
   bool sign_result = (unsigned_sum >> 31) & 1u;
 
   bool carry = (unsigned_sum >> 32) & 1u;
@@ -938,17 +1058,60 @@ std::string format_thumb16(uint16_t hw, uint32_t addr) {
     return "BKPT #" + hex(imm8, 2);
   }
 
+  // PUSH (T1) / POP (T1)
+  if ((hw & 0xFE00) == 0xB400) {
+    std::string s = "PUSH {";
+    bool first = true;
+    for (int i = 0; i < 8; ++i) {
+      if (hw & (1u << i)) {
+        s +=
+            std::string(first ? "" : ", ") + reg_name(static_cast<uint32_t>(i));
+        first = false;
+      }
+    }
+    if ((hw >> 8) & 1) {
+      s += std::string(first ? "" : ", ") + "lr";
+      first = false;
+    }
+    return s + "}";
+  }
+
+  if ((hw & 0xFE00) == 0xBC00) {
+    std::string s = "POP {";
+    bool first = true;
+    for (int i = 0; i < 8; ++i) {
+      if (hw & (1u << i)) {
+        s +=
+            std::string(first ? "" : ", ") + reg_name(static_cast<uint32_t>(i));
+        first = false;
+      }
+    }
+    if ((hw >> 8) & 1) {
+      s += std::string(first ? "" : ", ") + "pc";
+      first = false;
+    }
+    return s + "}";
+  }
+
+  // BX (T1) / BLX (register, T1)
+  if ((hw & 0xFF87) == 0x4700) {
+    uint32_t rm = (hw >> 3) & 0xF;
+    if ((hw >> 7) & 1)
+      return std::string("BLX ") + reg_name(rm);
+    return std::string("BX ") + reg_name(rm);
+  }
+
   return "TODO " + hex(hw, 4);
 }
 
 std::string cpu::disassemble(uint32_t address, uint8_t &length) const {
   std::string s = "$" + hex(address, 8) + ": ";
 
-  uint16_t hw1 = read_flash(address);
+  uint16_t hw1 = read(address);
 
   // bits[15:11] == 11101 / 11110 / 11111 -> 32-bit Thumb instruction
   if ((hw1 >> 11) >= 0x1D) {
-    uint16_t hw2 = read_flash(address + 2);
+    uint16_t hw2 = read(address + 2);
     length = 4;
     return s + "TODO " + hex(hw1, 4) + " " + hex(hw2, 4) + " {32-bit}";
   }

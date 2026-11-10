@@ -16,7 +16,8 @@ public:
 
   bool OnUserCreate() override {
     loadTestProgram();
-    m_asm = m_cpu.disassemble(0x0000, sizeof(bus::flash) - 1);
+    m_asm = m_cpu.disassemble(bus::kFlashBase,
+                              bus::kFlashBase + bus::kFlashSize - 1);
     m_cpu.reset();
     return true;
   }
@@ -53,21 +54,24 @@ private:
   void loadTestProgram() {
     // TODO: More proper testing methods / platform
     //
-    // const uint8_t program[] = {
-    //     0x02, 0x48, // 0x0000: LDR  R0, [PC, #8]
-    //     0x07, 0x21, // 0x0004: MOVS R1, #7
-    //     0x08, 0x22, // MOVS R2, #3
-    //     0x08, 0x23, // MOVS R3, #3
-    //     0xC8, 0x1C, // 0x0006: ADDS R0, R1, #3
-    //     0xBF, 0x21, // MOVS R1, #191
-    //     0xBF, 0x22, // MOVS R2, #191
-    //     0x88, 0x18, // ADDS R0, R1, R2
-    //     0x58, 0x60, // STR R0, [R3, #4]
-    //     0x0A, 0x20, // MOVS R0, #10
-    //     0x88, 0x1E, // SUBS R0, R0, #3
-    //     0xF6, 0xE7, // B (Uncond)
-    //     0xAB, 0xBE, // BKPT #0xAB
-    // };
+    const uint8_t program[] = {
+        0x00, 0x50, 0x00, 0x20, // 0x08000000: SP    = 0x20005000
+        0x09, 0x00, 0x00, 0x08, // 0x08000004: reset -> 0x08000009 (Thumb)
+        0x02, 0x48,             // 0x0000: LDR  R0, [PC, #8]
+        0x07, 0x21,             // 0x0004: MOVS R1, #7
+        0x09, 0x22,             // MOVS R2, #3
+        0x08, 0x23,             // MOVS R3, #3
+        0x08, 0x21,             // MOVS R1, #3
+        0x53, 0x1A,             // 0x0006: ADDS R0, R1, #3
+        0xBF, 0x21,             // MOVS R1, #191
+        0xBF, 0x22,             // MOVS R2, #191
+        0x88, 0x18,             // ADDS R0, R1, R2
+        0x58, 0x60,             // STR R0, [R3, #4]
+        0x0A, 0x20,             // MOVS R0, #10
+        0x88, 0x1E,             // SUBS R0, R0, #3
+        0xF6, 0xE7,             // B (Uncond)
+        0xAB, 0xBE,             // BKPT #0xAB
+    };
     //
     // const uint8_t program[] = {
     //     // Test 1: Equal (5 == 5)
@@ -89,17 +93,24 @@ private:
     //     0xFE, 0xE7 // B .
     // };
 
-    const uint8_t program[] = {
-        0x05, 0x20, // 0x0000: MOVS R0, #5
-        0x05, 0x28, // 0x0002: CMP R0, #5
-        // 0x02, 0xD0, // 0x0004: BEQ +2 (placeholder for now)
-        0x02, 0x21, // 0x0006: MOVS R1, #1 (should be skipped)
-        0x05, 0x22, // 0x0008: MOVS R2, #5
-        0x0A, 0x40, // ANDS R1, R2
-        0xFE, 0xE7  // 0x000A: B . (infinite loop)
-    };
-
-    m_bus.load_flash(0x0000, program, sizeof(program));
+    // const uint8_t program[] = {
+    //     // --- Vector table ---
+    //     0x00, 0x50, 0x00, 0x20, // 0x08000000: SP    = 0x20005000
+    //     0x09, 0x00, 0x00, 0x08, // 0x08000004: reset -> 0x08000009 (Thumb)
+    //
+    //     // --- Code ---
+    //     0x05, 0x20, // 0x08000008: MOVS r0, #5
+    //     0x01, 0xB4, // 0x0800000A: PUSH {r0}        SP 0x20005000 ->
+    //     0x20004FFC 0x09, 0x20, // 0x0800000C: MOVS r0, #9 0x01, 0xBC, //
+    //     0x0800000E: POP  {r0}        r0 = 5 again, SP restored 0x00, 0xF0,
+    //     0x03, 0xF8, // 0x08000010: BL -> 0x0800001A 0x05, 0x28, //
+    //     0x08000014: CMP  r0, #5      Z = 1 0x01, 0xD0, // 0x08000016: BEQ
+    //     0x0800001C  skips the next instruction 0xAA, 0x22, // 0x08000018:
+    //     MOVS r2, #0xAA  must be skipped 0x70, 0x47, // 0x0800001A: BX lr ->
+    //     0x08000014 0xFE, 0xE7, // 0x0800001C: B .             spin
+    // };
+    //
+    m_bus.load_flash(bus::kFlashBase, program, sizeof(program));
 
     // m_bus.load_program("./flash.bin");
   }
