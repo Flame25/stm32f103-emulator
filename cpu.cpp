@@ -42,17 +42,17 @@ uint16_t cpu::read(uint32_t address) const { return m_bus->read16(address); }
 
 uint32_t cpu::read32(uint32_t address) const { return m_bus->read32(address); }
 
-bool cpu::GetFlag(apsr_flag f) const {
+bool cpu::get_flag(apsr_flag f) const {
   return (xpsr & static_cast<uint32_t>(f)) != 0;
 }
 
 // ConditionPassed() for the 4-bit cond field. Returns false for the reserved
 // cond == 0b111x encodings.
 bool cpu::condition_passed(uint8_t cond) {
-  const bool n = GetFlag(N);
-  const bool z = GetFlag(Z);
-  const bool c = GetFlag(C);
-  const bool v = GetFlag(V);
+  const bool n = get_flag(N);
+  const bool z = get_flag(Z);
+  const bool c = get_flag(C);
+  const bool v = get_flag(V);
 
   switch (cond >> 1) {
   case 0b000: // EQ / NE
@@ -74,50 +74,11 @@ bool cpu::condition_passed(uint8_t cond) {
   }
 }
 
-void cpu::SetFlag(apsr_flag f, bool v) {
+void cpu::set_flag(apsr_flag f, bool v) {
   if (v)
     xpsr |= static_cast<uint32_t>(f);
   else
     xpsr &= ~static_cast<uint32_t>(f);
-}
-
-void cpu::set_flag(char name, bool value) {
-  switch (name) {
-  case 'N':
-    SetFlag(N, value);
-    break;
-  case 'Z':
-    SetFlag(Z, value);
-    break;
-  case 'C':
-    SetFlag(C, value);
-    break;
-  case 'V':
-    SetFlag(V, value);
-    break;
-  case 'Q':
-    SetFlag(Q, value);
-    break;
-  default:
-    break;
-  }
-}
-
-bool cpu::flag(char name) const {
-  switch (name) {
-  case 'N':
-    return GetFlag(N);
-  case 'Z':
-    return GetFlag(Z);
-  case 'C':
-    return GetFlag(C);
-  case 'V':
-    return GetFlag(V);
-  case 'Q':
-    return GetFlag(Q);
-  default:
-    return false;
-  }
 }
 
 uint16_t cpu::fetch16() { return read(pc); }
@@ -465,6 +426,37 @@ cpu::decoded cpu::decode_thumb32(uint16_t hw1, uint16_t hw2) {
     return d;
   }
 
+  if ((hi >> 1) == 0 && ((hw1 >> 4) & 0x3F) == 0b100100) {
+    // MOVW - MOV(IMM) T3
+    const uint32_t i = (hw1 >> 10) & 1u;
+    const uint32_t imm4 = hw1 & 0xF;
+    const uint32_t imm3 = (hw2 >> 12) & 0x7;
+    const uint32_t imm8 = hw2 & 0xFF;
+
+    d.flags = false;
+    d.imm = (imm4 << 12) | (i << 11) | (imm3 << 8) | imm8;
+    d.rd = (hw2 >> 8) & 0xF;
+    d.op = Instruction::MOVW;
+
+    return d;
+  }
+
+  if ((hi >> 1) == 0 && ((hw1 >> 4) & 0x3F) == 0b101100) {
+    // MOVT T1
+    const uint32_t i = (hw1 >> 10) & 1u;
+    const uint32_t imm4 = hw1 & 0xF;
+    const uint32_t imm3 = (hw2 >> 12) & 0x7;
+    const uint32_t imm8 = hw2 & 0xFF;
+
+    const uint32_t imm16 = (imm4 << 12) | (i << 11) | (imm3 << 8) | imm8;
+
+    d.op = Instruction::MOVT;
+    d.rd = (hw2 >> 8) & 0xF;
+    d.imm = imm16;
+
+    return d;
+  }
+
   return d; // TODO: remaining 11110 sub-groups
 }
 
@@ -499,6 +491,12 @@ void cpu::execute() {
     break;
   case Instruction::MOV_REG:
     MOV_REG();
+    break;
+  case Instruction::MOVT:
+    MOVT();
+    break;
+  case Instruction::MOVW:
+    MOVW();
     break;
   case Instruction::PUSH:
     PUSH();
@@ -622,10 +620,10 @@ uint8_t cpu::CMP_IMM() {
   bool carry = (unsigned_sum >> 32) & 1u;
   uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
 
-  SetFlag(N, (result32 >> 31) & 1u);
-  SetFlag(Z, result32 == 0);
-  SetFlag(C, carry);
-  SetFlag(V, sign_a != sign_b && sign_result != sign_a);
+  set_flag(N, (result32 >> 31) & 1u);
+  set_flag(Z, result32 == 0);
+  set_flag(C, carry);
+  set_flag(V, sign_a != sign_b && sign_result != sign_a);
 
   return 0;
 }
@@ -643,10 +641,10 @@ uint8_t cpu::CMP_REG() {
   bool carry = (unsigned_sum >> 32) & 1u;
   uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
 
-  SetFlag(N, (result32 >> 31) & 1u);
-  SetFlag(C, carry);
-  SetFlag(Z, result32 == 0);
-  SetFlag(V, sign_a != sign_b && sign_result != sign_a);
+  set_flag(N, (result32 >> 31) & 1u);
+  set_flag(C, carry);
+  set_flag(Z, result32 == 0);
+  set_flag(V, sign_a != sign_b && sign_result != sign_a);
 
   return 0;
 }
@@ -657,8 +655,8 @@ uint8_t cpu::MOV_IMM() {
 
   // NON IT Block - MOV becoming MOVS
   if (!it_state) {
-    SetFlag(N, (result >> 31) & 1u);
-    SetFlag(Z, result == 0);
+    set_flag(N, (result >> 31) & 1u);
+    set_flag(Z, result == 0);
   } else {
     // MOV with Carry
   }
@@ -678,13 +676,37 @@ uint8_t cpu::MOV_REG() {
     r[ins.rd] = result;
 
     if (ins.flags) {
-      SetFlag(N, (result >> 31) & 1u);
-      SetFlag(Z, result == 0);
+      set_flag(N, (result >> 31) & 1u);
+      set_flag(Z, result == 0);
     }
   } else {
 
     // TODO: Last in ITBlock
   }
+  return 0;
+}
+
+uint8_t cpu::MOVT() {
+
+  if (ins.rd == 15 || ins.rd == 13) {
+    // TODO: UNPREDICTABLE
+    return 0;
+  }
+
+  r[ins.rd] = (r[ins.rd] & 0x0000FFFFu) | (ins.imm << 16);
+  return 0;
+}
+
+uint8_t cpu::MOVW() {
+
+  if (ins.rd == 15 || ins.rd == 13) {
+    // TODO: UNPREDICTABLE
+    return 0;
+  }
+
+  uint32_t result = ins.imm;
+  r[ins.rd] = result;
+
   return 0;
 }
 
@@ -755,8 +777,8 @@ uint8_t cpu::AND_REG() {
   r[ins.rn] = result;
 
   if (ins.flags) {
-    SetFlag(N, (result >> 31) & 1u);
-    SetFlag(Z, result == 0);
+    set_flag(N, (result >> 31) & 1u);
+    set_flag(Z, result == 0);
     // TODO: Set Flag C not implemented since T1 doesnt do shift
   }
   return 0;
@@ -774,14 +796,14 @@ uint8_t cpu::ADD_IMM() {
   uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
 
   if (ins.flags) {
-    SetFlag(N, (result32 >> 31) & 1u);
-    SetFlag(C, carry);
-    SetFlag(Z, result32 == 0);
+    set_flag(N, (result32 >> 31) & 1u);
+    set_flag(C, carry);
+    set_flag(Z, result32 == 0);
 
     if (sign_a == sign_b && sign_result != sign_a) {
-      SetFlag(V, 1);
+      set_flag(V, 1);
     } else {
-      SetFlag(V, 0);
+      set_flag(V, 0);
     }
   }
 
@@ -804,10 +826,10 @@ uint8_t cpu::ADD_REG() {
   uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
 
   if (ins.flags) {
-    SetFlag(N, (result32 >> 31) & 1u);
-    SetFlag(C, carry);
-    SetFlag(Z, result32 == 0);
-    SetFlag(V, sign_a == sign_b && sign_result != sign_a);
+    set_flag(N, (result32 >> 31) & 1u);
+    set_flag(C, carry);
+    set_flag(Z, result32 == 0);
+    set_flag(V, sign_a == sign_b && sign_result != sign_a);
   }
 
   r[ins.rd] = result32;
@@ -818,7 +840,7 @@ uint8_t cpu::ADC_REG() {
 
   uint32_t operand1 = r[ins.rd];
   uint32_t operand2 = r[ins.rm];
-  const uint32_t carry_in = GetFlag(C) ? 1u : 0u;
+  const uint32_t carry_in = get_flag(C) ? 1u : 0u;
 
   uint64_t unsigned_sum = static_cast<uint64_t>(operand1) + operand2 + carry_in;
 
@@ -830,10 +852,10 @@ uint8_t cpu::ADC_REG() {
   uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
 
   if (ins.flags) {
-    SetFlag(N, (result32 >> 31) & 1u);
-    SetFlag(C, carry);
-    SetFlag(Z, result32 == 0);
-    SetFlag(V, sign_a == sign_b && sign_result != sign_a);
+    set_flag(N, (result32 >> 31) & 1u);
+    set_flag(C, carry);
+    set_flag(Z, result32 == 0);
+    set_flag(V, sign_a == sign_b && sign_result != sign_a);
   }
 
   r[ins.rd] = result32;
@@ -854,10 +876,10 @@ uint8_t cpu::SUB_IMM() {
   uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
 
   if (ins.flags) {
-    SetFlag(N, (result32 >> 31) & 1u);
-    SetFlag(Z, result32 == 0);
-    SetFlag(C, carry);
-    SetFlag(V, sign_a != sign_b && sign_result != sign_a);
+    set_flag(N, (result32 >> 31) & 1u);
+    set_flag(Z, result32 == 0);
+    set_flag(C, carry);
+    set_flag(V, sign_a != sign_b && sign_result != sign_a);
   }
 
   r[ins.rd] = result32;
@@ -877,10 +899,10 @@ uint8_t cpu::SUB_REG() {
   uint32_t result32 = static_cast<uint32_t>(unsigned_sum);
 
   if (ins.flags) {
-    SetFlag(N, (result32 >> 31) & 1u);
-    SetFlag(Z, result32 == 0);
-    SetFlag(C, carry);
-    SetFlag(V, sign_a != sign_b && sign_result != sign_a);
+    set_flag(N, (result32 >> 31) & 1u);
+    set_flag(Z, result32 == 0);
+    set_flag(C, carry);
+    set_flag(V, sign_a != sign_b && sign_result != sign_a);
   }
 
   r[ins.rd] = result32;
@@ -1031,9 +1053,11 @@ std::string format_thumb16(uint16_t hw, uint32_t addr) {
            ", [sp, #" + std::to_string(offset) + "]";
   }
 
-  case 0b11100: { // B Unconditional T2
-    uint32_t offset = static_cast<int32_t>(
-        static_cast<int32_t>(static_cast<int16_t>((hw & 0x7FF) << 5) >> 4));
+  case 0b11100: { // B Unconditional T2: 11100 imm11
+    int32_t offset = static_cast<int32_t>(
+        static_cast<int16_t>((hw & 0x7FF) << 5) >> 4);
+    uint32_t target = addr + 4 + static_cast<uint32_t>(offset);
+    return "B $" + hex(target, 8);
   }
   }
 
@@ -1104,6 +1128,73 @@ std::string format_thumb16(uint16_t hw, uint32_t addr) {
   return "TODO " + hex(hw, 4);
 }
 
+// Format a 32-bit Thumb instruction. Only the encodings already decoded by
+// decode_thumb32() are handled here; anything else falls through to the raw
+// halfword dump so the trace still shows something usable.
+std::string format_thumb32(uint16_t hw1, uint16_t hw2, uint32_t addr) {
+  const uint32_t s_bit = (hw1 >> 10) & 1u;
+  const uint32_t j1_bit = (hw2 >> 13) & 1u;
+  const uint32_t j2_bit = (hw2 >> 11) & 1u;
+  const uint32_t cond4 = (hw1 >> 6) & 0xF;
+
+  // B (T4): 11110 S imm10 | 10 J1 1 J2 imm11
+  if ((hw1 >> 11) == 0b11110 && (hw2 >> 14) == 0b10 && ((hw2 >> 12) & 1u)) {
+    const uint32_t i1 = (~(j1_bit ^ s_bit)) & 1u;
+    const uint32_t i2 = (~(j2_bit ^ s_bit)) & 1u;
+    const uint32_t imm = (s_bit << 24) | (i1 << 23) | (i2 << 22) |
+                         ((hw1 & 0x3FFu) << 12) | ((hw2 & 0x7FFu) << 1);
+    const uint32_t target =
+        addr + 4 +
+        static_cast<uint32_t>(static_cast<int32_t>(sign_extend(imm, 25)));
+    return "B.W $" + hex(target, 8);
+  }
+
+  // B<c> (T3): 11110 S cond imm6 | 10 J1 0 J2 imm11
+  if ((hw1 >> 11) == 0b11110 && (hw2 >> 14) == 0b10 && !((hw2 >> 12) & 1u)) {
+    const uint32_t imm = (s_bit << 20) | (j2_bit << 19) | (j1_bit << 18) |
+                         ((hw1 & 0x3Fu) << 12) | ((hw2 & 0x7FFu) << 1);
+    const uint32_t target =
+        addr + 4 +
+        static_cast<uint32_t>(static_cast<int32_t>(sign_extend(imm, 21)));
+    static const char *conditions[] = {"EQ", "NE", "CS", "CC", "MI",
+                                       "PL", "VS", "VC", "HI", "LS",
+                                       "GE", "LT", "GT", "LE"};
+    const std::string name =
+        cond4 < 14 ? std::string("B") + conditions[cond4] : std::string("B<c>");
+    return name + ".W $" + hex(target, 8);
+  }
+
+  // BL (T1): 11110 S imm10 | 11 J1 1 J2 imm11
+  if ((hw1 >> 11) == 0b11110 && (hw2 >> 14) == 0b11 && ((hw2 >> 12) & 1u)) {
+    const uint32_t i1 = (~(j1_bit ^ s_bit)) & 1u;
+    const uint32_t i2 = (~(j2_bit ^ s_bit)) & 1u;
+    const uint32_t imm = (s_bit << 24) | (i1 << 23) | (i2 << 22) |
+                         ((hw1 & 0x3FFu) << 12) | ((hw2 & 0x7FFu) << 1);
+    const uint32_t target =
+        addr + 4 +
+        static_cast<uint32_t>(static_cast<int32_t>(sign_extend(imm, 25)));
+    return "BL $" + hex(target, 8);
+  }
+
+  const bool oph0 = (hw2 >> 15) == 0; // hw2[15] selects the 11110 sub-group
+  if (oph0) {
+    const uint32_t op4 = (hw1 >> 4) & 0xF;
+    const uint32_t rd = (hw2 >> 8) & 0xF;
+    const uint32_t i_bit = (hw1 >> 10) & 1u;
+    const uint32_t imm4 = hw1 & 0xF;
+    const uint32_t imm3 = (hw2 >> 12) & 0x7;
+    const uint32_t imm8 = hw2 & 0xFF;
+    const uint32_t imm16 = (imm4 << 12) | (i_bit << 11) | (imm3 << 8) | imm8;
+
+    if (op4 == 0b0100) // MOVW T3
+      return "MOVW " + std::string(reg_name(rd)) + ", #0x" + hex(imm16, 4);
+    if (op4 == 0b1100) // MOVT T1
+      return "MOVT " + std::string(reg_name(rd)) + ", #0x" + hex(imm16, 4);
+  }
+
+  return "TODO " + hex(hw1, 4) + " " + hex(hw2, 4) + " {32-bit}";
+}
+
 std::string cpu::disassemble(uint32_t address, uint8_t &length) const {
   std::string s = "$" + hex(address, 8) + ": ";
 
@@ -1113,7 +1204,7 @@ std::string cpu::disassemble(uint32_t address, uint8_t &length) const {
   if ((hw1 >> 11) >= 0x1D) {
     uint16_t hw2 = read(address + 2);
     length = 4;
-    return s + "TODO " + hex(hw1, 4) + " " + hex(hw2, 4) + " {32-bit}";
+    return s + format_thumb32(hw1, hw2, address);
   }
 
   length = 2;

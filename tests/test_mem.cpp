@@ -109,7 +109,7 @@ void test_execution(bus &b, cpu &c) {
   check(c.reg_pc() == 0x08000014u, "BX lr returns to LR");
 
   run_instruction(c);
-  check(c.flag('Z'), "CMP r0, #5 sets Z");
+  check(c.get_flag(cpu::Z), "CMP r0, #5 sets Z");
 
   run_instruction(c);
   check(c.reg_pc() == 0x0800001Cu, "BEQ taken");
@@ -131,7 +131,7 @@ void test_alu_flags() {
     };
     b.load_flash(bus::kFlashBase, program, sizeof(program));
     c.set_pc(bus::kFlashBase);
-    c.set_flag('C', true);
+    c.set_flag(cpu::C, true);
 
     run_instruction(c); // MOVS r0, #5
     run_instruction(c); // MOVS r1, #3
@@ -161,10 +161,100 @@ void test_alu_flags() {
     check(c.reg(0) == 0x7FFFFFFFu && c.reg(1) == 0xFFFFFFFFu,
           "literal loads placed r0/r1");
     // 0x7FFFFFFF - 0xFFFFFFFF = 0x80000000 -> signed overflow, V must be 1.
-    check(c.flag('V'), "CMP register sets V on signed overflow (uses Rm)");
-    check(c.flag('N'), "CMP register sets N from the result");
-    check(!c.flag('Z'), "CMP register clears Z for a non-zero result");
+    check(c.get_flag(cpu::V),
+          "CMP register sets V on signed overflow (uses Rm)");
+    check(c.get_flag(cpu::N), "CMP register sets N from the result");
+    check(!c.get_flag(cpu::Z), "CMP register clears Z for a non-zero result");
   }
+
+  {
+    bus b;
+    cpu c(b);
+    const uint8_t program[] = {
+        0x09, 0x22, // MOVS R2, #9
+        0x07, 0x21, // MOVS R1, #7
+        0x53, 0x1A, // SUBS R3, R2, R1 -> r3 = -2, N = 1
+    };
+
+    b.load_flash(bus::kFlashBase, program, sizeof(program));
+    c.set_pc(bus::kFlashBase);
+
+    run_instruction(c);
+    run_instruction(c);
+    run_instruction(c);
+
+    check(c.reg(3) == 0x2, "check register 3 for positive result");
+
+    check(c.get_flag(cpu::C), "SUBS register set C no-borrow");
+    check(!c.get_flag(cpu::N), "SUBS register set N to false");
+    check(!c.get_flag(cpu::Z), "SUBS regsiter set Z to false");
+  }
+
+  bus b;
+  cpu c(b);
+  const uint8_t program[] = {
+      0x05, 0x22, // MOVS R2, #9
+      0x07, 0x21, // MOVS R1, #7
+      0x53, 0x1A, // SUBS R3, R2, R1 -> r3 = -2, N = 1
+  };
+
+  c.set_flag(cpu::C, false);
+
+  b.load_flash(bus::kFlashBase, program, sizeof(program));
+  c.set_pc(bus::kFlashBase);
+
+  run_instruction(c);
+  run_instruction(c);
+  run_instruction(c);
+
+  check(c.reg(3) == 0xFFFFFFFE, "check register 3 for negative result");
+  check(!c.get_flag(cpu::C), "SUBS register set C borrow");
+  check(c.get_flag(cpu::N), "SUBS register set N to true");
+  check(!c.get_flag(cpu::Z), "SUBS register set Z to false");
+}
+
+void test_movw_movt_decode() {
+  bus b;
+  cpu c(b);
+  const uint8_t program[] = {
+      0x41, 0xF2, 0x34, 0x23, // movw r3, #0x1234
+      0xC8, 0xF2, 0x00, 0x03, // movt r3, #0x8000
+  };
+  b.load_flash(bus::kFlashBase, program, sizeof(program));
+
+  uint8_t len = 0;
+  check(c.disassemble(bus::kFlashBase, len) == "$08000000: MOVW r3, #0x1234",
+        "MOVW disassembles");
+  check(len == 4, "MOVW is a 32-bit encoding");
+
+  check(c.disassemble(bus::kFlashBase + 4, len) ==
+            "$08000004: MOVT r3, #0x8000",
+        "MOVT disassembles");
+  check(len == 4, "MOVT is a 32-bit encoding");
+}
+
+void test_movw_movt_exec() {
+  bus b;
+  cpu c(b);
+  const uint8_t program[] = {
+      0x41, 0xF2, 0x34, 0x23, // 0x00 movw r3, #0x1234
+      0xC8, 0xF2, 0x00, 0x03, // 0x04 movt r3, #0x8000
+      0xFE, 0xE7,             // 0x08 B .
+  };
+  b.load_flash(bus::kFlashBase, program, sizeof(program));
+
+  c.set_flag(cpu::N, true); // poison flags so a stray write is visible
+  c.set_flag(cpu::Z, true);
+  c.set_pc(bus::kFlashBase);
+
+  run_instruction(c);
+  check(c.reg(3) == 0x00001234u, "MOVW zero-extends imm16 into Rd");
+
+  run_instruction(c);
+  check(c.reg(3) == 0x80001234u, "MOVT writes Rd[31:16], keeps Rd[15:0]");
+
+  check(c.get_flag(cpu::N), "MOVW did not disturb N");
+  check(c.get_flag(cpu::Z), "MOVT did not disturb Z");
 }
 
 } // namespace
@@ -182,6 +272,8 @@ int main() {
   test_reset(c);
   test_execution(b, c);
   test_alu_flags();
+  test_movw_movt_decode();
+  test_movw_movt_exec();
 
   std::printf("\n%d checks, %d failure(s)\n", checks, failures);
   return failures == 0 ? 0 : 1;

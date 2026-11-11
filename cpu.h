@@ -11,7 +11,16 @@
 
 // ARM Cortex M3 Core
 class cpu {
+
 public:
+  enum apsr_flag {
+    Q = (1 << 0),
+    V = (1 << 1),
+    Z = (1 << 2),
+    C = (1 << 3),
+    N = (1 << 4),
+  };
+
   explicit cpu(bus &b);
   ~cpu() = default;
 
@@ -27,13 +36,13 @@ public:
 
   inline bool complete() { return cycles == 0; }
 
-  bool flag(char name) const;
+  bool get_flag(apsr_flag f) const;
+  void set_flag(apsr_flag f, bool v);
 
   void handle_semihosting();
 
   // Debug/UI hooks: place the core at an address, or force a flag.
   void set_pc(uint32_t address) { pc = address; }
-  void set_flag(char name, bool value);
 
   // Human readable form of the instruction at `address`. Advances `length`
   // by the size of the encoding (2 or 4 bytes).
@@ -48,14 +57,6 @@ public:
   uint32_t read32(uint32_t address) const;
 
 private:
-  enum apsr_flag {
-    Q = (1 << 0),
-    V = (1 << 1),
-    Z = (1 << 2),
-    C = (1 << 3),
-    N = (1 << 4),
-  };
-
   // One entry per encoding we currently implement. decode fills it,
   // execute() dispatches on it.
   enum class Instruction : uint8_t {
@@ -71,6 +72,8 @@ private:
     CMP_REG,
     MOV_IMM,
     MOV_REG,
+    MOVT,
+    MOVW,
     PUSH,
     POP,
     BX_REG,
@@ -125,9 +128,6 @@ private:
 
   bus *m_bus = nullptr;
 
-  bool GetFlag(apsr_flag f) const;
-  void SetFlag(apsr_flag f, bool v);
-
   uint16_t fetch16();
   decoded decode_thumb16(uint16_t hw);
   decoded decode_thumb32(uint16_t hw1, uint16_t hw2);
@@ -150,6 +150,8 @@ private:
   uint8_t CMP_REG();
   uint8_t MOV_IMM();
   uint8_t MOV_REG();
+  uint8_t MOVT();
+  uint8_t MOVW();
   uint8_t PUSH();
   uint8_t POP();
   uint8_t BX_REG();

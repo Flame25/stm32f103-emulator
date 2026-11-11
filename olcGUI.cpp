@@ -59,10 +59,11 @@ private:
         0x09, 0x00, 0x00, 0x08, // 0x08000004: reset -> 0x08000009 (Thumb)
         0x02, 0x48,             // 0x0000: LDR  R0, [PC, #8]
         0x07, 0x21,             // 0x0004: MOVS R1, #7
-        0x09, 0x22,             // MOVS R2, #3
-        0x08, 0x23,             // MOVS R3, #3
-        0x08, 0x21,             // MOVS R1, #3
-        0x53, 0x1A,             // 0x0006: ADDS R0, R1, #3
+        0x05, 0x22,             // MOVS R2, #9
+        0x07, 0x21,             // MOVS R1, #7
+        0x53, 0x1A,             // SUBS R3, R2, R1 -> r3 = -2, N = 1
+        0x41, 0xF2, 0x34, 0x23, // movw r3, #0x1234
+        0xC8, 0xF2, 0x00, 0x03, // movt r3, #0x8000
         0xBF, 0x21,             // MOVS R1, #191
         0xBF, 0x22,             // MOVS R2, #191
         0x88, 0x18,             // ADDS R0, R1, R2
@@ -158,10 +159,12 @@ private:
 
   void DrawCpu(int x, int y) {
     DrawString(x, y, "STATUS:", olc::WHITE);
-    const char *names = "NZCVQ";
+    static const cpu::apsr_flag flags[] = {cpu::N, cpu::Z, cpu::C, cpu::V,
+                                           cpu::Q};
+    static const char names[] = "NZCVQ";
     for (int i = 0; i < 5; ++i) {
       DrawString(x + 64 + i * 16, y, std::string(1, names[i]),
-                 m_cpu.flag(names[i]) ? olc::GREEN : olc::RED);
+                 m_cpu.get_flag(flags[i]) ? olc::GREEN : olc::RED);
     }
 
     DrawString(x, y + 10, "PC: $" + hex(m_cpu.reg_pc(), 8));
